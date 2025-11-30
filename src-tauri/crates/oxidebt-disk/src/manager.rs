@@ -7,7 +7,7 @@ use sha1::{Digest, Sha1};
 use sha2::Sha256;
 use std::collections::HashMap;
 use std::io::SeekFrom;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::fs::{File, OpenOptions};
@@ -16,6 +16,32 @@ use tokio::sync::{Mutex as TokioMutex, Semaphore};
 
 const MAX_CONCURRENT_OPS: usize = 512;
 const FILE_HANDLE_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Validates that a file path is safe and doesn't attempt path traversal.
+/// Returns an error if the path contains `..` components or is absolute.
+fn validate_file_path(file_path: &Path) -> Result<(), DiskError> {
+    // Check for any parent directory references or absolute paths
+    for component in file_path.components() {
+        match component {
+            Component::ParentDir => {
+                return Err(DiskError::PathTraversal(file_path.display().to_string()));
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(DiskError::PathTraversal(file_path.display().to_string()));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Validates all file paths in a torrent and returns error if any path is unsafe.
+fn validate_all_file_paths(files: &[FileEntry]) -> Result<(), DiskError> {
+    for file in files {
+        validate_file_path(&file.path)?;
+    }
+    Ok(())
+}
 
 struct PerFileHandle {
     file: TokioMutex<File>,
@@ -145,15 +171,21 @@ pub struct TorrentStorage {
 }
 
 impl TorrentStorage {
+    /// Creates a new TorrentStorage instance.
+    ///
+    /// Returns an error if any file path in the torrent contains path traversal attempts.
     pub fn new(
         base_path: PathBuf,
         files: Vec<FileEntry>,
         pieces: Vec<PieceInfo>,
         total_length: u64,
         is_v2: bool,
-    ) -> Self {
+    ) -> Result<Self, DiskError> {
+        // Validate all file paths before accepting the torrent
+        validate_all_file_paths(&files)?;
+
         let handle_cache = FileHandleCache::new(base_path.clone(), files.clone());
-        Self {
+        Ok(Self {
             base_path,
             files,
             pieces,
@@ -161,7 +193,7 @@ impl TorrentStorage {
             allocation_mode: AllocationMode::Sparse,
             is_v2,
             handle_cache,
-        }
+        })
     }
 
     pub fn with_allocation_mode(mut self, mode: AllocationMode) -> Self {

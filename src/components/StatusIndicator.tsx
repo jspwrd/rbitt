@@ -1,32 +1,7 @@
 import * as React from 'react';
 import { gsap } from 'gsap';
 import { getStateColor, formatState } from '../utils';
-
-// All possible torrent states
-type TorrentState =
-  | 'downloading'
-  | 'forcedDL'
-  | 'uploading'
-  | 'forcedUP'
-  | 'stalledDL'
-  | 'stalledUP'
-  | 'completed'
-  | 'pausedDL'
-  | 'pausedUP'
-  | 'stoppedDL'
-  | 'stoppedUP'
-  | 'checkingDL'
-  | 'checkingUP'
-  | 'checkingResumeData'
-  | 'queuedDL'
-  | 'queuedUP'
-  | 'metaDL'
-  | 'forcedMetaDL'
-  | 'allocating'
-  | 'moving'
-  | 'missingFiles'
-  | 'error'
-  | 'unknown';
+import type { TorrentState } from '../types';
 
 // States that represent active transfers (should pulse based on speed)
 const ACTIVE_TRANSFER_STATES: TorrentState[] = [
@@ -47,6 +22,25 @@ const BACKGROUND_ACTIVITY_STATES: TorrentState[] = [
   'moving',
 ];
 
+// Speed thresholds (in KB/s) for determining pulse rate
+const SPEED_THRESHOLDS = {
+  VERY_SLOW: 10,      // < 10 KB/s
+  SLOW: 100,          // 10-100 KB/s
+  MEDIUM: 1024,       // 100 KB/s - 1 MB/s
+  FAST: 10240,        // 1-10 MB/s
+} as const;
+
+// Pulse durations (in seconds) corresponding to speed ranges
+const PULSE_DURATIONS = {
+  VERY_SLOW: 2.5,     // < 10 KB/s
+  SLOW: 2.0,          // 10-100 KB/s
+  MEDIUM: 1.5,        // 100 KB/s - 1 MB/s
+  FAST: 1.0,          // 1-10 MB/s
+  VERY_FAST: 0.5,     // > 10 MB/s
+  BACKGROUND: 1.5,    // Background tasks (checking, allocating)
+  NO_SPEED: 2.5,      // No activity
+} as const;
+
 interface StatusIndicatorProps {
   status?: TorrentState;
   showLabel?: boolean;
@@ -56,15 +50,15 @@ interface StatusIndicatorProps {
 // Calculate pulse duration based on speed (bytes/sec)
 // Faster speed = shorter duration (faster pulse)
 function getPulseDuration(speed: number): number {
-  if (speed <= 0) return 2.5; // No speed, slow pulse
+  if (speed <= 0) return PULSE_DURATIONS.NO_SPEED;
 
   const kbps = speed / 1024;
 
-  if (kbps < 10) return 2.5;        // < 10 KB/s: very slow pulse
-  if (kbps < 100) return 2.0;       // 10-100 KB/s: slow pulse
-  if (kbps < 1024) return 1.5;      // 100 KB/s - 1 MB/s: medium pulse
-  if (kbps < 10240) return 1.0;     // 1-10 MB/s: fast pulse
-  return 0.5;                        // > 10 MB/s: very fast pulse
+  if (kbps < SPEED_THRESHOLDS.VERY_SLOW) return PULSE_DURATIONS.VERY_SLOW;
+  if (kbps < SPEED_THRESHOLDS.SLOW) return PULSE_DURATIONS.SLOW;
+  if (kbps < SPEED_THRESHOLDS.MEDIUM) return PULSE_DURATIONS.MEDIUM;
+  if (kbps < SPEED_THRESHOLDS.FAST) return PULSE_DURATIONS.FAST;
+  return PULSE_DURATIONS.VERY_FAST;
 }
 
 export function StatusIndicator({
@@ -86,7 +80,7 @@ export function StatusIndicator({
   // Calculate pulse duration
   const pulseDuration = React.useMemo(() => {
     if (!shouldPulse) return 0;
-    if (isBackgroundActivity) return 1.5; // Steady medium pulse for background tasks
+    if (isBackgroundActivity) return PULSE_DURATIONS.BACKGROUND;
     return getPulseDuration(speed);
   }, [shouldPulse, isBackgroundActivity, speed]);
 

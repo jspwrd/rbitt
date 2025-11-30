@@ -14,6 +14,58 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::RwLock;
 
+/// Validates that a filename is safe for use in plugin paths.
+/// Returns an error if the filename contains path traversal or unsafe characters.
+fn validate_plugin_filename(filename: &str) -> Result<(), String> {
+    // Check for empty filename
+    if filename.is_empty() {
+        return Err("Empty filename".to_string());
+    }
+
+    // Check for path separators (both Unix and Windows)
+    if filename.contains('/') || filename.contains('\\') {
+        return Err(format!(
+            "Filename contains path separators: {}",
+            filename
+        ));
+    }
+
+    // Check for parent directory references
+    if filename == ".." || filename.starts_with("..") {
+        return Err(format!(
+            "Filename contains path traversal: {}",
+            filename
+        ));
+    }
+
+    // Check for hidden files (starting with .)
+    if filename.starts_with('.') {
+        return Err(format!(
+            "Hidden files not allowed: {}",
+            filename
+        ));
+    }
+
+    // Must have .py extension
+    if !filename.ends_with(".py") {
+        return Err(format!(
+            "Plugin must have .py extension: {}",
+            filename
+        ));
+    }
+
+    // Only allow alphanumeric, underscore, hyphen, and .py extension
+    let name_without_ext = &filename[..filename.len() - 3];
+    if !name_without_ext.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+        return Err(format!(
+            "Filename contains invalid characters: {}",
+            filename
+        ));
+    }
+
+    Ok(())
+}
+
 /// A search plugin configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchPlugin {
@@ -213,6 +265,9 @@ impl SearchEngine {
             .filter(|s| s.ends_with(".py"))
             .unwrap_or("plugin.py");
 
+        // Validate filename to prevent path traversal
+        validate_plugin_filename(filename)?;
+
         let path = self.plugin_dir.join(filename);
 
         tokio::fs::write(&path, &content)
@@ -238,6 +293,9 @@ impl SearchEngine {
             .file_name()
             .and_then(|n| n.to_str())
             .ok_or_else(|| "Invalid file path".to_string())?;
+
+        // Validate filename to prevent path traversal
+        validate_plugin_filename(filename)?;
 
         let dest_path = self.plugin_dir.join(filename);
 

@@ -17,7 +17,6 @@ export function SearchModal({ onClose, onError, onAddMagnet }: SearchModalProps)
   const [plugins, setPlugins] = useState<SearchPluginInfo[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchCategory, setSearchCategory] = useState("");
-  const [selectedPlugins] = useState<string[]>([]);
   const [currentSearch, setCurrentSearch] = useState<SearchJobInfo | null>(null);
   const [searchResults, setSearchResults] = useState<SearchResultInfo[]>([]);
   const [loading, setLoading] = useState(false);
@@ -33,7 +32,9 @@ export function SearchModal({ onClose, onError, onAddMagnet }: SearchModalProps)
     let interval: number | undefined;
     if (currentSearch && currentSearch.status === "running") {
       interval = window.setInterval(() => {
-        refreshSearchStatus(currentSearch.id);
+        refreshSearchStatus(currentSearch.id).catch((e) => {
+          console.error("Failed to refresh search status:", e);
+        });
       }, 1000);
     }
     return () => {
@@ -57,7 +58,7 @@ export function SearchModal({ onClose, onError, onAddMagnet }: SearchModalProps)
     try {
       const searchId: string = await invoke("start_search", {
         query: searchQuery,
-        plugins: selectedPlugins.length > 0 ? selectedPlugins : ["all"],
+        plugins: ["all"],
         category: searchCategory || null,
       });
       await refreshSearchStatus(searchId);

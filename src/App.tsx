@@ -15,6 +15,7 @@ import {
   SettingsModal,
   RssModal,
   SearchModal,
+  ResizablePanel,
 } from "./components";
 
 import {
@@ -579,15 +580,22 @@ function App() {
           />
 
           {selectedTorrentData && (
-            <DetailPanel
-              torrent={selectedTorrentData}
-              activeTab={detailTab}
-              onTabChange={setDetailTab}
-              trackerInfo={trackerInfo}
-              peerInfo={peerInfo}
-              fileInfo={fileInfo}
-              onError={setError}
-            />
+            <ResizablePanel
+              minHeight={100}
+              maxHeight={600}
+              defaultHeight={200}
+              storageKey="detailPanelHeight"
+            >
+              <DetailPanel
+                torrent={selectedTorrentData}
+                activeTab={detailTab}
+                onTabChange={setDetailTab}
+                trackerInfo={trackerInfo}
+                peerInfo={peerInfo}
+                fileInfo={fileInfo}
+                onError={setError}
+              />
+            </ResizablePanel>
           )}
         </div>
       </div>

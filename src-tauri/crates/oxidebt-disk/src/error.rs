@@ -22,4 +22,7 @@ pub enum DiskError {
 
     #[error("torrent not registered: {0}")]
     TorrentNotFound(String),
+
+    #[error("path traversal detected in file path: {0}")]
+    PathTraversal(String),
 }

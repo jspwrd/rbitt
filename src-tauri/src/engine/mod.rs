@@ -337,43 +337,73 @@ impl TorrentEngine {
                     // TODO: Add magnet link support in RSS processor
                     tracing::info!("RSS: Would add magnet: {}", torrent_url);
                 } else {
+                    // Maximum torrent file size (10 MB - should be more than enough)
+                    const MAX_TORRENT_FILE_SIZE: u64 = 10 * 1024 * 1024;
+
                     // Download torrent file
                     match reqwest::get(torrent_url).await {
-                        Ok(response) => match response.bytes().await {
-                            Ok(data) => match oxidebt_torrent::Metainfo::from_bytes(&data) {
-                                Ok(meta) => {
-                                    let hash = match &meta.info_hash {
-                                        oxidebt_torrent::InfoHash::V1(h) => h.to_hex(),
-                                        oxidebt_torrent::InfoHash::V2(h) => h.to_hex(),
-                                        oxidebt_torrent::InfoHash::Hybrid { v1, .. } => v1.to_hex(),
-                                    };
-
-                                    tracing::info!(
-                                        "RSS: Adding torrent '{}' ({})",
-                                        meta.info.name,
-                                        hash
-                                    );
-
-                                    let mut managed =
-                                        ManagedTorrent::with_save_path(meta, save_path);
-                                    managed.category = event.category;
-                                    managed.tags = event.tags.into_iter().collect();
-                                    managed.share_limits = default_limits.read().clone();
-
-                                    if event.add_paused {
-                                        managed.state = TorrentState::Paused;
-                                    }
-
-                                    torrents.write().insert(hash, managed);
-                                }
-                                Err(e) => {
+                        Ok(response) => {
+                            // Check content-length before downloading
+                            if let Some(content_length) = response.content_length() {
+                                if content_length > MAX_TORRENT_FILE_SIZE {
                                     tracing::warn!(
-                                        "RSS: Failed to parse torrent from {}: {}",
-                                        torrent_url,
-                                        e
+                                        "RSS: Torrent file too large ({} bytes, max {}): {}",
+                                        content_length,
+                                        MAX_TORRENT_FILE_SIZE,
+                                        torrent_url
                                     );
+                                    continue;
                                 }
-                            },
+                            }
+
+                            match response.bytes().await {
+                            Ok(data) => {
+                                // Also check after download in case content-length was missing
+                                if data.len() as u64 > MAX_TORRENT_FILE_SIZE {
+                                    tracing::warn!(
+                                        "RSS: Downloaded torrent file too large ({} bytes, max {}): {}",
+                                        data.len(),
+                                        MAX_TORRENT_FILE_SIZE,
+                                        torrent_url
+                                    );
+                                    continue;
+                                }
+
+                                match oxidebt_torrent::Metainfo::from_bytes(&data) {
+                                    Ok(meta) => {
+                                        let hash = match &meta.info_hash {
+                                            oxidebt_torrent::InfoHash::V1(h) => h.to_hex(),
+                                            oxidebt_torrent::InfoHash::V2(h) => h.to_hex(),
+                                            oxidebt_torrent::InfoHash::Hybrid { v1, .. } => v1.to_hex(),
+                                        };
+
+                                        tracing::info!(
+                                            "RSS: Adding torrent '{}' ({})",
+                                            meta.info.name,
+                                            hash
+                                        );
+
+                                        let mut managed =
+                                            ManagedTorrent::with_save_path(meta, save_path);
+                                        managed.category = event.category;
+                                        managed.tags = event.tags.into_iter().collect();
+                                        managed.share_limits = default_limits.read().clone();
+
+                                        if event.add_paused {
+                                            managed.state = TorrentState::Paused;
+                                        }
+
+                                        torrents.write().insert(hash, managed);
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "RSS: Failed to parse torrent from {}: {}",
+                                            torrent_url,
+                                            e
+                                        );
+                                    }
+                                }
+                            }
                             Err(e) => {
                                 tracing::warn!(
                                     "RSS: Failed to read torrent from {}: {}",
@@ -381,7 +411,8 @@ impl TorrentEngine {
                                     e
                                 );
                             }
-                        },
+                        }
+                        }
                         Err(e) => {
                             tracing::warn!(
                                 "RSS: Failed to download torrent from {}: {}",
@@ -613,8 +644,8 @@ impl TorrentEngine {
 
                                 // If no_seed_mode and disconnect_on_complete are both enabled,
                                 // disconnect all peers for this completed torrent
-                                if no_seed_mode.load(Ordering::Relaxed)
-                                    && disconnect_on_complete.load(Ordering::Relaxed)
+                                if no_seed_mode.load(Ordering::Acquire)
+                                    && disconnect_on_complete.load(Ordering::Acquire)
                                 {
                                     tracing::info!(
                                         "Disconnecting all peers for completed torrent {} (no-seed mode with disconnect on complete)",
@@ -1178,7 +1209,7 @@ impl TorrentEngine {
     /// Sets no seed mode. When enabled, the client rejects all upload requests
     /// and torrents will not transition to seeding state.
     pub fn set_no_seed_mode(&self, enabled: bool) {
-        self.no_seed_mode.store(enabled, Ordering::Relaxed);
+        self.no_seed_mode.store(enabled, Ordering::Release);
         tracing::info!(
             "No Seed Mode {}",
             if enabled { "enabled" } else { "disabled" }
@@ -1187,14 +1218,14 @@ impl TorrentEngine {
 
     /// Returns whether no seed mode is currently enabled.
     pub fn is_no_seed_mode(&self) -> bool {
-        self.no_seed_mode.load(Ordering::Relaxed)
+        self.no_seed_mode.load(Ordering::Acquire)
     }
 
     /// Sets disconnect on complete mode. When enabled along with no_seed_mode,
     /// all peers will be disconnected when a torrent completes.
     pub fn set_disconnect_on_complete(&self, enabled: bool) {
         self.disconnect_on_complete
-            .store(enabled, Ordering::Relaxed);
+            .store(enabled, Ordering::Release);
         tracing::info!(
             "Disconnect on Complete {}",
             if enabled { "enabled" } else { "disabled" }
@@ -1203,7 +1234,7 @@ impl TorrentEngine {
 
     /// Returns whether disconnect on complete mode is currently enabled.
     pub fn is_disconnect_on_complete(&self) -> bool {
-        self.disconnect_on_complete.load(Ordering::Relaxed)
+        self.disconnect_on_complete.load(Ordering::Acquire)
     }
 
     /// Adds a torrent from a file path.
@@ -1373,7 +1404,7 @@ impl TorrentEngine {
             })
             .collect();
 
-        let storage = TorrentStorage::new(base_path, files, pieces, meta.info.total_length, is_v2);
+        let storage = TorrentStorage::new(base_path, files, pieces, meta.info.total_length, is_v2)?;
 
         storage.preallocate().await?;
         self.disk_manager.register(hash.clone(), storage);
@@ -1972,8 +2003,8 @@ impl TorrentEngine {
                         // Skip peer connections for Completed torrents when both no_seed_mode
                         // and disconnect_on_complete are enabled
                         let skip_connections = torrent.state == TorrentState::Completed
-                            && no_seed_mode.load(Ordering::Relaxed)
-                            && disconnect_on_complete.load(Ordering::Relaxed);
+                            && no_seed_mode.load(Ordering::Acquire)
+                            && disconnect_on_complete.load(Ordering::Acquire);
 
                         let mut peers_to_connect: HashSet<_> = if skip_connections {
                             HashSet::new()
@@ -2283,7 +2314,7 @@ impl TorrentEngine {
                             );
                         } else if torrent.state == TorrentState::Completed
                             && peers_interested
-                            && !no_seed_mode.load(Ordering::Relaxed)
+                            && !no_seed_mode.load(Ordering::Acquire)
                         {
                             torrent.state = TorrentState::Seeding;
                             // Start tracking seeding time if not already started
@@ -3122,6 +3153,31 @@ impl TorrentEngine {
         self.external_program_settings.read().clone()
     }
 
+    /// Escape a string for safe use in shell commands.
+    /// This prevents command injection by escaping shell metacharacters.
+    #[cfg(unix)]
+    fn shell_escape(s: &str) -> String {
+        // For Unix shells, wrap in single quotes and escape any single quotes
+        // Single quotes preserve everything literally except single quotes themselves
+        let escaped = s.replace('\'', "'\"'\"'");
+        format!("'{}'", escaped)
+    }
+
+    #[cfg(windows)]
+    fn shell_escape(s: &str) -> String {
+        // For Windows cmd.exe, escape special characters
+        // The safest approach is to wrap in double quotes and escape problematic chars
+        let escaped = s
+            .replace('^', "^^")
+            .replace('&', "^&")
+            .replace('<', "^<")
+            .replace('>', "^>")
+            .replace('|', "^|")
+            .replace('%', "%%")
+            .replace('"', "\"\"");
+        format!("\"{}\"", escaped)
+    }
+
     /// Run external program for a completed torrent
     pub async fn run_completion_program(&self, hash: &str) -> Result<(), String> {
         let settings = self.external_program_settings.read().clone();
@@ -3139,13 +3195,19 @@ impl TorrentEngine {
             (torrent.meta.info.name.clone(), torrent.save_path.clone())
         };
 
-        // Replace placeholders
+        // Escape all user-controlled values to prevent command injection
+        let escaped_name = Self::shell_escape(&name);
+        let escaped_full_path = Self::shell_escape(&save_path.join(&name).to_string_lossy());
+        let escaped_save_path = Self::shell_escape(&save_path.to_string_lossy());
+        let escaped_hash = Self::shell_escape(hash);
+
+        // Replace placeholders with escaped values
         let command = command_template
-            .replace("%N", &name)
-            .replace("%F", &save_path.join(&name).to_string_lossy())
-            .replace("%R", &save_path.to_string_lossy())
-            .replace("%D", &save_path.to_string_lossy())
-            .replace("%I", hash);
+            .replace("%N", &escaped_name)
+            .replace("%F", &escaped_full_path)
+            .replace("%R", &escaped_save_path)
+            .replace("%D", &escaped_save_path)
+            .replace("%I", &escaped_hash);
 
         tracing::info!("Running completion program: {}", command);
 

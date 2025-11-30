@@ -9,3 +9,5 @@ export { AddTorrentModal } from "./AddTorrentModal";
 export { SettingsModal } from "./SettingsModal";
 export { RssModal } from "./RssModal";
 export { SearchModal } from "./SearchModal";
+export { ErrorBoundary } from "./ErrorBoundary";
+export { ResizablePanel } from "./ResizablePanel";

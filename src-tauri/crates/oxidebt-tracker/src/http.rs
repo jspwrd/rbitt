@@ -7,6 +7,28 @@ use oxidebt_torrent::InfoHashV1;
 use reqwest::Client;
 use url::Url;
 
+/// Safely convert an i64 to u32, returning an error if out of bounds
+fn i64_to_u32(value: i64, field_name: &str) -> Result<u32, TrackerError> {
+    if value < 0 || value > u32::MAX as i64 {
+        return Err(TrackerError::InvalidResponse(format!(
+            "{} value {} out of u32 bounds",
+            field_name, value
+        )));
+    }
+    Ok(value as u32)
+}
+
+/// Safely convert an i64 to u16, returning an error if out of bounds
+fn i64_to_u16(value: i64, field_name: &str) -> Result<u16, TrackerError> {
+    if value < 0 || value > u16::MAX as i64 {
+        return Err(TrackerError::InvalidResponse(format!(
+            "{} value {} out of u16 bounds",
+            field_name, value
+        )));
+    }
+    Ok(value as u16)
+}
+
 pub struct HttpTracker {
     client: Client,
 }
@@ -71,26 +93,29 @@ impl HttpTracker {
             return Err(TrackerError::TrackerFailure(msg));
         }
 
-        let interval = dict
+        let interval_raw = dict
             .get(b"interval".as_slice())
             .and_then(|v| v.as_integer())
-            .ok_or_else(|| TrackerError::InvalidResponse("missing interval".into()))?
-            as u32;
+            .ok_or_else(|| TrackerError::InvalidResponse("missing interval".into()))?;
+        let interval = i64_to_u32(interval_raw, "interval")?;
 
         let min_interval = dict
             .get(b"min interval".as_slice())
             .and_then(|v| v.as_integer())
-            .map(|v| v as u32);
+            .map(|v| i64_to_u32(v, "min_interval"))
+            .transpose()?;
 
         let complete = dict
             .get(b"complete".as_slice())
             .and_then(|v| v.as_integer())
-            .map(|v| v as u32);
+            .map(|v| i64_to_u32(v, "complete"))
+            .transpose()?;
 
         let incomplete = dict
             .get(b"incomplete".as_slice())
             .and_then(|v| v.as_integer())
-            .map(|v| v as u32);
+            .map(|v| i64_to_u32(v, "incomplete"))
+            .transpose()?;
 
         let warning_message = dict
             .get(b"warning message".as_slice())
@@ -135,12 +160,13 @@ impl HttpTracker {
                                 TrackerError::InvalidResponse("peer missing ip".into())
                             })?;
 
-                        let port = dict
+                        let port_raw = dict
                             .get(b"port".as_slice())
                             .and_then(|v| v.as_integer())
                             .ok_or_else(|| {
                                 TrackerError::InvalidResponse("peer missing port".into())
-                            })? as u16;
+                            })?;
+                        let port = i64_to_u16(port_raw, "port")?;
 
                         let peer_id = dict.get(b"peer id".as_slice()).and_then(|v| {
                             v.as_bytes().and_then(|b| {
@@ -248,17 +274,23 @@ impl HttpTracker {
             let complete = stats_dict
                 .get(b"complete".as_slice())
                 .and_then(|v| v.as_integer())
-                .unwrap_or(0) as u32;
+                .map(|v| i64_to_u32(v, "complete"))
+                .transpose()?
+                .unwrap_or(0);
 
             let incomplete = stats_dict
                 .get(b"incomplete".as_slice())
                 .and_then(|v| v.as_integer())
-                .unwrap_or(0) as u32;
+                .map(|v| i64_to_u32(v, "incomplete"))
+                .transpose()?
+                .unwrap_or(0);
 
             let downloaded = stats_dict
                 .get(b"downloaded".as_slice())
                 .and_then(|v| v.as_integer())
-                .unwrap_or(0) as u32;
+                .map(|v| i64_to_u32(v, "downloaded"))
+                .transpose()?
+                .unwrap_or(0);
 
             files.push((
                 hash,

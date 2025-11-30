@@ -50,7 +50,7 @@ async fn integration_test_parse_torrent_and_create_storage() {
 
     let pieces = vec![PieceInfo::v1(0, piece_hash, 0, metainfo.info.total_length)];
 
-    let storage = TorrentStorage::new(base_path, files, pieces, metainfo.info.total_length, false);
+    let storage = TorrentStorage::new(base_path, files, pieces, metainfo.info.total_length, false).expect("test storage creation");
 
     storage.preallocate().await.unwrap();
 
@@ -88,7 +88,7 @@ async fn integration_test_multifile_torrent_storage() {
 
     let pieces = vec![PieceInfo::v1(0, piece_hash, 0, total_size)];
 
-    let storage = TorrentStorage::new(base_path.clone(), files, pieces, total_size, false);
+    let storage = TorrentStorage::new(base_path.clone(), files, pieces, total_size, false).expect("test storage creation");
     storage.preallocate().await.unwrap();
 
     storage.write_piece(0, &piece_data).await.unwrap();
@@ -130,7 +130,7 @@ async fn integration_test_piece_manager_with_disk() {
         .map(|(i, hash)| PieceInfo::v1(i as u32, *hash, i as u64 * piece_length, piece_length))
         .collect();
 
-    let storage = TorrentStorage::new(base_path, files, pieces, total_size, false);
+    let storage = TorrentStorage::new(base_path, files, pieces, total_size, false).expect("test storage creation");
     storage.preallocate().await.unwrap();
 
     let piece_manager = PieceManager::new(piece_count, piece_length, total_size);
@@ -251,7 +251,7 @@ async fn integration_test_disk_manager_multiple_torrents() {
                 .map(|i| PieceInfo::v1(i as u32, [0u8; 20], i as u64 * piece_length, piece_length))
                 .collect();
 
-            let storage = TorrentStorage::new(base_path, files, pieces, total_size, false);
+            let storage = TorrentStorage::new(base_path, files, pieces, total_size, false).expect("test storage creation");
             storage.preallocate().await.unwrap();
 
             let hash = format!("hash_{}", torrent_id);
@@ -379,7 +379,7 @@ async fn integration_test_simulated_download_flow() {
 
     let storage = Arc::new(TorrentStorage::new(
         base_path, files, pieces, total_size, false,
-    ));
+    ).expect("test storage creation"));
     storage.preallocate().await.unwrap();
 
     let piece_manager = Arc::new(PieceManager::new(piece_count, piece_length, total_size));

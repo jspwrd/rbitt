@@ -3,9 +3,15 @@ use crate::value::Value;
 use bytes::Bytes;
 use std::collections::BTreeMap;
 
+/// Maximum allowed string/bytes length in bencode (1 GB)
+const MAX_STRING_LENGTH: usize = 1_000_000_000;
+
+/// Maximum nesting depth for lists and dictionaries
+const MAX_NESTING_DEPTH: usize = 100;
+
 pub fn decode(data: &[u8]) -> Result<Value, DecodeError> {
     let mut cursor = Cursor::new(data);
-    let value = decode_value(&mut cursor)?;
+    let value = decode_value(&mut cursor, 0)?;
 
     if cursor.remaining() > 0 {
         return Err(DecodeError::TrailingData);
@@ -16,7 +22,7 @@ pub fn decode(data: &[u8]) -> Result<Value, DecodeError> {
 
 pub fn decode_with_info_raw(data: &[u8]) -> Result<(Value, Option<Bytes>), DecodeError> {
     let mut cursor = Cursor::new(data);
-    let (value, info_raw) = decode_value_tracking_info(&mut cursor)?;
+    let (value, info_raw) = decode_value_tracking_info(&mut cursor, 0)?;
 
     if cursor.remaining() > 0 {
         return Err(DecodeError::TrailingData);
@@ -67,16 +73,23 @@ impl<'a> Cursor<'a> {
     }
 }
 
-fn decode_value(cursor: &mut Cursor) -> Result<Value, DecodeError> {
-    let (value, _) = decode_value_tracking_info(cursor)?;
+fn decode_value(cursor: &mut Cursor, depth: usize) -> Result<Value, DecodeError> {
+    let (value, _) = decode_value_tracking_info(cursor, depth)?;
     Ok(value)
 }
 
-fn decode_value_tracking_info(cursor: &mut Cursor) -> Result<(Value, Option<Bytes>), DecodeError> {
+fn decode_value_tracking_info(
+    cursor: &mut Cursor,
+    depth: usize,
+) -> Result<(Value, Option<Bytes>), DecodeError> {
+    if depth > MAX_NESTING_DEPTH {
+        return Err(DecodeError::NestingTooDeep);
+    }
+
     match cursor.peek().ok_or(DecodeError::UnexpectedEof)? {
         b'i' => Ok((decode_integer(cursor)?, None)),
-        b'l' => Ok((decode_list(cursor)?, None)),
-        b'd' => decode_dict_tracking_info(cursor),
+        b'l' => Ok((decode_list(cursor, depth)?, None)),
+        b'd' => decode_dict_tracking_info(cursor, depth),
         b'0'..=b'9' => Ok((decode_bytes(cursor)?, None)),
         b => Err(DecodeError::UnexpectedByte {
             expected: 'i',
@@ -149,11 +162,15 @@ fn decode_bytes(cursor: &mut Cursor) -> Result<Value, DecodeError> {
         .parse()
         .map_err(|_| DecodeError::InvalidStringLength)?;
 
+    if len > MAX_STRING_LENGTH {
+        return Err(DecodeError::StringTooLarge(len));
+    }
+
     let bytes = cursor.read_bytes(len)?;
     Ok(Value::Bytes(Bytes::copy_from_slice(bytes)))
 }
 
-fn decode_list(cursor: &mut Cursor) -> Result<Value, DecodeError> {
+fn decode_list(cursor: &mut Cursor, depth: usize) -> Result<Value, DecodeError> {
     let start = cursor.next()?;
     debug_assert_eq!(start, b'l');
 
@@ -164,13 +181,16 @@ fn decode_list(cursor: &mut Cursor) -> Result<Value, DecodeError> {
             cursor.next()?;
             break;
         }
-        items.push(decode_value(cursor)?);
+        items.push(decode_value(cursor, depth + 1)?);
     }
 
     Ok(Value::List(items))
 }
 
-fn decode_dict_tracking_info(cursor: &mut Cursor) -> Result<(Value, Option<Bytes>), DecodeError> {
+fn decode_dict_tracking_info(
+    cursor: &mut Cursor,
+    depth: usize,
+) -> Result<(Value, Option<Bytes>), DecodeError> {
     let start = cursor.next()?;
     debug_assert_eq!(start, b'd');
 
@@ -184,7 +204,7 @@ fn decode_dict_tracking_info(cursor: &mut Cursor) -> Result<(Value, Option<Bytes
             break;
         }
 
-        let key = match decode_value(cursor)? {
+        let key = match decode_value(cursor, depth + 1)? {
             Value::Bytes(b) => b,
             _ => return Err(DecodeError::NonStringKey),
         };
@@ -199,7 +219,7 @@ fn decode_dict_tracking_info(cursor: &mut Cursor) -> Result<(Value, Option<Bytes
         let is_info = key.as_ref() == b"info";
         let value_start = cursor.position();
 
-        let value = decode_value(cursor)?;
+        let value = decode_value(cursor, depth + 1)?;
 
         if is_info {
             let raw = cursor.slice_from(value_start);

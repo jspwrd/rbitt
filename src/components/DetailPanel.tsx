@@ -146,15 +146,39 @@ export function DetailPanel({
     loadCategories();
   }, []);
 
+  // Tag validation constants
+  const MAX_TAG_LENGTH = 50;
+  const TAG_PATTERN = /^[a-zA-Z0-9_\-\s]+$/;
+
+  // Validate tag input
+  function validateTag(tag: string): string | null {
+    const trimmed = tag.trim();
+    if (!trimmed) {
+      return "Tag cannot be empty";
+    }
+    if (trimmed.length > MAX_TAG_LENGTH) {
+      return `Tag must be ${MAX_TAG_LENGTH} characters or less`;
+    }
+    if (!TAG_PATTERN.test(trimmed)) {
+      return "Tag can only contain letters, numbers, spaces, underscores, and hyphens";
+    }
+    return null;
+  }
+
   // Tag handlers
   async function handleAddTag() {
-    if (!newTag.trim()) return;
+    const trimmedTag = newTag.trim();
+    const validationError = validateTag(trimmedTag);
+    if (validationError) {
+      onError?.(validationError);
+      return;
+    }
     try {
       await invoke("add_torrent_tag", {
         infoHash: torrent.info_hash,
-        tag: newTag.trim(),
+        tag: trimmedTag,
       });
-      setTags((prev) => [...prev, newTag.trim()]);
+      setTags((prev) => [...prev, trimmedTag]);
       setNewTag("");
     } catch (e) {
       console.error("Failed to add tag:", e);
@@ -242,11 +266,6 @@ export function DetailPanel({
       console.error("Failed to toggle sequential download:", e);
       onError?.(String(e));
     }
-  }
-
-  function getPriorityLabel(priority: number): string {
-    const p = FILE_PRIORITIES.find((fp) => fp.value === priority);
-    return p?.label || "Normal";
   }
 
   function getPriorityColor(priority: number): string {

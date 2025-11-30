@@ -32,10 +32,36 @@ export interface PendingTorrent {
   data: number[];
 }
 
+// All possible torrent states (qBittorrent compatible)
+export type TorrentState =
+  | 'downloading'
+  | 'forcedDL'
+  | 'uploading'
+  | 'forcedUP'
+  | 'stalledDL'
+  | 'stalledUP'
+  | 'completed'
+  | 'pausedDL'
+  | 'pausedUP'
+  | 'stoppedDL'
+  | 'stoppedUP'
+  | 'checkingDL'
+  | 'checkingUP'
+  | 'checkingResumeData'
+  | 'queuedDL'
+  | 'queuedUP'
+  | 'metaDL'
+  | 'forcedMetaDL'
+  | 'allocating'
+  | 'moving'
+  | 'missingFiles'
+  | 'error'
+  | 'unknown';
+
 export interface TorrentStatus {
   info_hash: string;
   name: string;
-  state: string;
+  state: TorrentState;
   progress: number;
   download_rate: number;
   upload_rate: number;

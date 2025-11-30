@@ -31,6 +31,12 @@ pub enum DecodeError {
 
     #[error("negative zero is not allowed")]
     NegativeZero,
+
+    #[error("string length {0} exceeds maximum allowed size")]
+    StringTooLarge(usize),
+
+    #[error("nesting depth exceeds maximum allowed depth")]
+    NestingTooDeep,
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]

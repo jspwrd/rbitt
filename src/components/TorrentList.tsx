@@ -14,12 +14,15 @@ import {
   isQueued,
   isError,
 } from "../utils";
-import type { TorrentStatus } from "../types";
+import type { TorrentStatus, TorrentState } from "../types";
+
+// Number of columns in the torrent table
+const TORRENT_TABLE_COLUMNS = 9;
 
 // Get the relevant speed for the status indicator based on torrent state
 function getRelevantSpeed(torrent: TorrentStatus): number {
   // For uploading states, use upload rate
-  if (isUploading(torrent.state) || torrent.state === 'uploading' || torrent.state === 'forcedUP') {
+  if (isUploading(torrent.state)) {
     return torrent.upload_rate;
   }
   // For downloading states (including metadata), use download rate
@@ -33,13 +36,13 @@ function getRelevantSpeed(torrent: TorrentStatus): number {
 interface TorrentListProps {
   torrents: TorrentStatus[];
   selectedTorrent: string | null;
-  onSelect: (infoHash: string) => void;
+  onSelect: (infoHash: string | null) => void;
   onDoubleClick: (torrent: TorrentStatus) => void;
   onAddClick: () => void;
   useStatusIndicators?: boolean;
 }
 
-function getStateIcon(state: string) {
+function getStateIcon(state: TorrentState) {
   if (isError(state)) {
     return <Icons.Error />;
   }
@@ -81,8 +84,20 @@ export function TorrentList({
   onAddClick,
   useStatusIndicators = false,
 }: TorrentListProps) {
+  const handleContainerClick = (e: React.MouseEvent) => {
+    // Only deselect if clicking directly on the container or table (not on a row)
+    const target = e.target as HTMLElement;
+    if (
+      target.classList.contains("torrent-list-container") ||
+      target.classList.contains("torrent-table") ||
+      target.tagName === "TBODY"
+    ) {
+      onSelect(null);
+    }
+  };
+
   return (
-    <div className="torrent-list-container">
+    <div className="torrent-list-container" onClick={handleContainerClick}>
       <table className="torrent-table">
         <thead>
           <tr>
@@ -100,7 +115,7 @@ export function TorrentList({
         <tbody>
           {torrents.length === 0 ? (
             <tr className="empty-row">
-              <td colSpan={9}>
+              <td colSpan={TORRENT_TABLE_COLUMNS}>
                 <div className="empty-state">
                   <p>No torrents</p>
                   <button className="btn-primary" onClick={onAddClick}>
@@ -121,7 +136,7 @@ export function TorrentList({
                   <div className="torrent-name-cell">
                     {useStatusIndicators ? (
                       <StatusIndicator
-                        status={torrent.state as any}
+                        status={torrent.state}
                         showLabel={false}
                         speed={getRelevantSpeed(torrent)}
                       />

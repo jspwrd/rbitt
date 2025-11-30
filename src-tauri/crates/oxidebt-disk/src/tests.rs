@@ -22,7 +22,7 @@ fn create_test_storage(temp: &TempDir, piece_length: u64, file_size: u64) -> Tor
         })
         .collect();
 
-    TorrentStorage::new(base_path, files, pieces, file_size, false)
+    TorrentStorage::new(base_path, files, pieces, file_size, false).expect("test storage creation")
 }
 
 #[tokio::test]
@@ -85,7 +85,7 @@ async fn test_multifile_storage() {
         PieceInfo::v1(1, [0u8; 20], 16384, 3616),
     ];
 
-    let storage = TorrentStorage::new(base_path, files, pieces, 20000, false);
+    let storage = TorrentStorage::new(base_path, files, pieces, 20000, false).expect("test storage creation");
     storage.preallocate().await.unwrap();
 
     let data: Vec<u8> = (0..16384).map(|i| (i % 256) as u8).collect();
@@ -285,7 +285,7 @@ async fn stress_test_many_small_files() {
         })
         .collect();
 
-    let storage = TorrentStorage::new(base_path, files, pieces, total_size, false);
+    let storage = TorrentStorage::new(base_path, files, pieces, total_size, false).expect("test storage creation");
     storage.preallocate().await.unwrap();
 
     for i in 0..piece_count {
@@ -389,7 +389,7 @@ async fn stress_test_piece_spanning_multiple_files() {
         PieceInfo::v1(1, [0u8; 20], 8192, 6808),
     ];
 
-    let storage = TorrentStorage::new(base_path, files, pieces, total_size, false);
+    let storage = TorrentStorage::new(base_path, files, pieces, total_size, false).expect("test storage creation");
     storage.preallocate().await.unwrap();
 
     let data0: Vec<u8> = (0..8192).map(|i| (i % 256) as u8).collect();
@@ -439,7 +439,7 @@ async fn stress_test_subdirectory_files() {
     let total_size = 15000u64;
     let pieces = vec![PieceInfo::v1(0, [0u8; 20], 0, 15000)];
 
-    let storage = TorrentStorage::new(base_path.clone(), files, pieces, total_size, false);
+    let storage = TorrentStorage::new(base_path.clone(), files, pieces, total_size, false).expect("test storage creation");
     storage.preallocate().await.unwrap();
 
     assert!(base_path.join("folder1/subfolder").exists());
