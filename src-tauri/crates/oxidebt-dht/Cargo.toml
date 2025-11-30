@@ -1,0 +1,23 @@
+[package]
+name = "oxidebt-dht"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "BitTorrent DHT (Kademlia) implementation"
+
+[dependencies]
+oxidebt-constants = { path = "../oxidebt-constants" }
+oxidebt-bencode = { path = "../oxidebt-bencode" }
+oxidebt-torrent = { path = "../oxidebt-torrent" }
+thiserror = { workspace = true }
+bytes = { workspace = true }
+tokio = { workspace = true }
+rand = { workspace = true }
+tracing = { workspace = true }
+sha1 = { workspace = true }
+parking_lot = { workspace = true }
+hex = { workspace = true }
+futures = { workspace = true }
+
+[dev-dependencies]

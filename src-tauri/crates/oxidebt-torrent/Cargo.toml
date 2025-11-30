@@ -1,0 +1,19 @@
+[package]
+name = "oxidebt-torrent"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Torrent metainfo parsing for v1, v2, and hybrid torrents"
+
+[dependencies]
+oxidebt-bencode = { path = "../oxidebt-bencode" }
+thiserror = { workspace = true }
+bytes = { workspace = true }
+sha1 = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+url = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]

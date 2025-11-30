@@ -1,0 +1,22 @@
+[package]
+name = "oxidebt-tracker"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "HTTP and UDP BitTorrent tracker client"
+
+[dependencies]
+oxidebt-constants = { path = "../oxidebt-constants" }
+oxidebt-torrent = { path = "../oxidebt-torrent" }
+oxidebt-bencode = { path = "../oxidebt-bencode" }
+thiserror = { workspace = true }
+bytes = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+url = { workspace = true }
+rand = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+
+[dev-dependencies]

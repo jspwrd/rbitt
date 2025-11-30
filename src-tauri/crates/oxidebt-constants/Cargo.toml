@@ -1,0 +1,9 @@
+[package]
+name = "oxidebt-constants"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Centralized constants for OxideBT BitTorrent client"
+
+[dependencies]

@@ -1,0 +1,13 @@
+[package]
+name = "oxidebt-bencode"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Bencode parser and serializer for BitTorrent"
+
+[dependencies]
+thiserror = { workspace = true }
+bytes = { workspace = true }
+
+[dev-dependencies]

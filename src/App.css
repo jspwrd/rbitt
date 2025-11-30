@@ -1,0 +1,1140 @@
+/* RBitt - Modern BitTorrent Client Styles */
+
+:root {
+  /* Dark theme colors */
+  --bg-primary: #1e1e1e;
+  --bg-secondary: #252526;
+  --bg-tertiary: #2d2d30;
+  --bg-hover: #3e3e42;
+  --bg-selected: #094771;
+
+  --text-primary: #cccccc;
+  --text-secondary: #858585;
+  --text-muted: #5a5a5a;
+
+  --border-color: #3c3c3c;
+  --border-light: #454545;
+
+  /* State colors */
+  --state-downloading: #4ec9b0;
+  --state-seeding: #569cd6;
+  --state-paused: #858585;
+  --state-checking: #ce9178;
+  --state-error: #f14c4c;
+  --state-stalled: #f59e0b;
+  --state-active: #22c55e;
+  --state-inactive: #6b7280;
+  --state-moving: #8b5cf6;
+  --state-completed: #22c55e;
+  --state-metadata: #06b6d4;
+  --state-queued: #6b7280;
+
+  /* Accent colors */
+  --accent: #0e639c;
+  --accent-hover: #1177bb;
+  --accent-active: #094771;
+
+  --danger: #f14c4c;
+  --danger-hover: #d73a49;
+
+  --success: #4ec9b0;
+  --warning: #ce9178;
+
+  /* Dimensions */
+  --toolbar-height: 40px;
+  --statusbar-height: 24px;
+  --sidebar-width: 180px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-primary);
+  background-color: var(--bg-primary);
+  overflow: hidden;
+  user-select: none;
+}
+
+/* ==================== Setup Screen ==================== */
+.setup-screen {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--bg-primary) 0%, var(--bg-secondary) 100%);
+}
+
+.setup-content {
+  text-align: center;
+  padding: 3rem;
+  background: var(--bg-secondary);
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  max-width: 450px;
+  width: 100%;
+}
+
+.setup-title {
+  font-size: 2.5rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 0.5rem;
+  letter-spacing: -0.5px;
+}
+
+.setup-subtitle {
+  font-size: 1rem;
+  color: var(--text-secondary);
+  margin-bottom: 2rem;
+}
+
+.setup-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  text-align: left;
+}
+
+.setup-form label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  margin-bottom: -0.5rem;
+}
+
+.dir-select {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.dir-select input {
+  flex: 1;
+  padding: 0.75rem 1rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.setup-error {
+  margin-top: 1rem;
+  padding: 0.75rem;
+  background: rgba(241, 76, 76, 0.1);
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  color: var(--danger);
+  font-size: 0.85rem;
+}
+
+.setup-loading {
+  color: var(--text-secondary);
+  font-size: 1rem;
+  margin-top: 1rem;
+}
+
+/* ==================== Buttons ==================== */
+.btn-primary {
+  padding: 0.625rem 1.25rem;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  padding: 0.625rem 1.25rem;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--border-light);
+}
+
+.btn-secondary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-large {
+  padding: 0.875rem 1.5rem;
+  font-size: 1rem;
+}
+
+.btn-full {
+  width: 100%;
+}
+
+/* ==================== Main App Layout ==================== */
+.app {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-primary);
+}
+
+/* ==================== Toolbar ==================== */
+.toolbar {
+  height: var(--toolbar-height);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 0.5rem;
+  flex-shrink: 0;
+}
+
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.toolbar-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.toolbar-btn:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.toolbar-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.toolbar-btn.danger:hover:not(:disabled) {
+  background: rgba(241, 76, 76, 0.2);
+  color: var(--danger);
+}
+
+.toolbar-btn svg {
+  flex-shrink: 0;
+}
+
+.toolbar-separator {
+  width: 1px;
+  height: 20px;
+  background: var(--border-color);
+  margin: 0 0.5rem;
+}
+
+/* ==================== Error Banner ==================== */
+.error-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 1rem;
+  background: rgba(241, 76, 76, 0.15);
+  border-bottom: 1px solid var(--danger);
+  color: var(--danger);
+  font-size: 0.85rem;
+}
+
+.error-banner button {
+  padding: 0.25rem 0.75rem;
+  background: transparent;
+  border: 1px solid var(--danger);
+  border-radius: 4px;
+  color: var(--danger);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.error-banner button:hover {
+  background: rgba(241, 76, 76, 0.2);
+}
+
+/* ==================== Main Content ==================== */
+.main-content {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+/* ==================== Sidebar ==================== */
+.sidebar {
+  width: var(--sidebar-width);
+  background: var(--bg-secondary);
+  border-right: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow-y: auto;
+}
+
+.sidebar-section {
+  padding: 0.5rem 0;
+}
+
+.sidebar-header {
+  padding: 0.5rem 1rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+}
+
+.sidebar-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.5rem 1rem;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background-color 0.15s;
+  text-align: left;
+}
+
+.sidebar-item:hover {
+  background: var(--bg-hover);
+}
+
+.sidebar-item.active {
+  background: var(--bg-selected);
+}
+
+.sidebar-item svg {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.sidebar-item span:first-of-type {
+  flex: 1;
+}
+
+.sidebar-count {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  padding: 0.125rem 0.375rem;
+  border-radius: 10px;
+  min-width: 1.5rem;
+  text-align: center;
+}
+
+/* ==================== Content Area ==================== */
+.content-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ==================== Torrent List ==================== */
+.torrent-list-container {
+  flex: 1;
+  overflow: auto;
+}
+
+.torrent-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.torrent-table thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-tertiary);
+}
+
+.torrent-table th {
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+
+.torrent-table td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+
+.torrent-table tbody tr {
+  cursor: pointer;
+  transition: background-color 0.1s;
+}
+
+.torrent-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.torrent-table tbody tr.selected {
+  background: var(--bg-selected);
+}
+
+.col-name {
+  min-width: 250px;
+  max-width: 400px;
+}
+
+.col-size,
+.col-status,
+.col-seeds,
+.col-peers,
+.col-down,
+.col-up,
+.col-eta {
+  width: 90px;
+}
+
+.col-progress {
+  width: 150px;
+}
+
+.torrent-name-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.state-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.state-icon.spinning svg {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.torrent-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.progress-bar-container {
+  flex: 1;
+  height: 4px;
+  background: var(--bg-primary);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress-bar {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  min-width: 40px;
+  text-align: right;
+}
+
+.empty-row td {
+  padding: 0 !important;
+  border: none !important;
+}
+
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4rem 2rem;
+  color: var(--text-secondary);
+  gap: 1rem;
+}
+
+/* ==================== Detail Panel ==================== */
+.detail-panel {
+  height: 200px;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.detail-tabs {
+  display: flex;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.detail-tabs button {
+  padding: 0.5rem 1rem;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.detail-tabs button:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.detail-tabs button.active {
+  color: var(--text-primary);
+  border-bottom-color: var(--accent);
+}
+
+.detail-content {
+  flex: 1;
+  padding: 1rem;
+  overflow: auto;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0.75rem;
+}
+
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.detail-label {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.detail-value {
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+.detail-value.monospace {
+  font-family: 'SF Mono', Consolas, monospace;
+  font-size: 0.75rem;
+  word-break: break-all;
+}
+
+.monospace {
+  font-family: 'SF Mono', Consolas, monospace;
+}
+
+.detail-placeholder {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.peers-summary {
+  color: var(--text-secondary);
+}
+
+/* ==================== Status Bar ==================== */
+.status-bar {
+  height: var(--statusbar-height);
+  background: var(--bg-tertiary);
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 1rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.status-section {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.status-item {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.status-item svg {
+  opacity: 0.7;
+}
+
+.connection-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.connection-dot.connected {
+  background: var(--success);
+}
+
+.connection-dot.disconnected {
+  background: var(--danger);
+}
+
+/* ==================== Modals ==================== */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(2px);
+}
+
+.modal {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  width: 90%;
+  max-width: 600px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.modal-header h2 {
+  font-size: 1.1rem;
+  font-weight: 500;
+}
+
+.modal-close {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 1.5rem;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.modal-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.modal-content {
+  padding: 1.25rem;
+  overflow-y: auto;
+}
+
+/* ==================== Add Torrent Modal ==================== */
+.add-section {
+  margin-bottom: 1rem;
+}
+
+.add-section h3 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+  margin-bottom: 0.75rem;
+  color: var(--text-primary);
+}
+
+.add-section h3 svg {
+  opacity: 0.7;
+}
+
+.add-divider {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin: 1.5rem 0;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.add-divider::before,
+.add-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border-color);
+}
+
+.magnet-input {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.magnet-input input {
+  flex: 1;
+  padding: 0.625rem 0.875rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+}
+
+.magnet-input input::placeholder {
+  color: var(--text-muted);
+}
+
+.magnet-input input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.torrent-preview,
+.magnet-preview {
+  margin-top: 1rem;
+  padding: 1rem;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+}
+
+.torrent-preview h4,
+.magnet-preview h4 {
+  font-size: 0.95rem;
+  font-weight: 500;
+  margin-bottom: 0.75rem;
+  word-break: break-word;
+}
+
+.preview-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.375rem 0.75rem;
+  font-size: 0.85rem;
+}
+
+.preview-grid > span:nth-child(odd) {
+  color: var(--text-secondary);
+}
+
+.preview-files {
+  margin-top: 0.75rem;
+}
+
+.preview-files summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 0.85rem;
+}
+
+.preview-files summary:hover {
+  text-decoration: underline;
+}
+
+.preview-files ul {
+  list-style: none;
+  margin-top: 0.5rem;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.preview-files li {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.25rem 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.preview-files .file-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-right: 0.5rem;
+}
+
+.preview-files .file-size {
+  flex-shrink: 0;
+}
+
+.preview-files .more-files {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.torrent-preview button,
+.magnet-preview button {
+  margin-top: 1rem;
+}
+
+/* Multi-torrent selection layout */
+.torrent-preview-multi {
+  margin-top: 1rem;
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  grid-template-rows: 1fr auto;
+  gap: 1rem;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+  padding: 1rem;
+  min-height: 300px;
+}
+
+.torrent-list-panel {
+  grid-row: 1;
+  grid-column: 1;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border-color);
+  padding-right: 1rem;
+  overflow: hidden;
+}
+
+.torrent-list-header {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 0.5rem;
+}
+
+.torrent-list-items {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.torrent-list-item {
+  display: flex;
+  flex-direction: column;
+  padding: 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.torrent-list-item:hover {
+  background: var(--bg-hover);
+}
+
+.torrent-list-item.selected {
+  background: var(--accent);
+  color: var(--bg-primary);
+}
+
+.torrent-list-item.selected .torrent-list-size {
+  color: var(--bg-secondary);
+}
+
+.torrent-list-name {
+  font-size: 0.85rem;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.torrent-list-size {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.torrent-detail-panel {
+  grid-row: 1;
+  grid-column: 2;
+  overflow-y: auto;
+}
+
+.torrent-detail-panel h4 {
+  font-size: 0.95rem;
+  font-weight: 500;
+  margin-bottom: 0.75rem;
+  word-break: break-word;
+}
+
+.torrent-add-actions {
+  grid-row: 2;
+  grid-column: 1 / -1;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border-color);
+}
+
+/* ==================== Settings Modal ==================== */
+.settings-section {
+  margin-bottom: 1.5rem;
+}
+
+.settings-section:last-child {
+  margin-bottom: 0;
+}
+
+.settings-section h3 {
+  font-size: 0.9rem;
+  font-weight: 500;
+  margin-bottom: 0.75rem;
+  color: var(--text-primary);
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.settings-section .setting-value {
+  padding: 0.625rem 0.875rem;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  font-family: 'SF Mono', Consolas, monospace;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.setting-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+  margin-bottom: 0.75rem;
+}
+
+.setting-row label {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.setting-row input {
+  padding: 0.625rem 0.875rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  max-width: 200px;
+}
+
+.setting-row input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.setting-row .dir-select {
+  max-width: none;
+}
+
+.setting-row .dir-select input {
+  max-width: none;
+  flex: 1;
+}
+
+.setting-row.checkbox-row {
+  flex-direction: row;
+  align-items: center;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.setting-note {
+  font-size: 0.8rem;
+  color: var(--warning);
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  background: rgba(206, 145, 120, 0.1);
+  border-radius: 4px;
+}
+
+.btn-small {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8rem;
+}
+
+.settings-section p {
+  font-size: 0.85rem;
+  margin-bottom: 0.25rem;
+}
+
+.text-secondary {
+  color: var(--text-secondary);
+}
+
+/* ==================== Scrollbar ==================== */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-primary);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 5px;
+  border: 2px solid var(--bg-primary);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-light);
+}
+
+::-webkit-scrollbar-corner {
+  background: var(--bg-primary);
+}
+
+/* ==================== Selection ==================== */
+::selection {
+  background: var(--accent);
+  color: white;
+}
+
+/* ==================== Focus styles ==================== */
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ==================== Tracker Table ==================== */
+.tracker-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.tracker-table th,
+.tracker-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.tracker-table th {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-weight: 500;
+  position: sticky;
+  top: 0;
+}
+
+.tracker-table td {
+  color: var(--text-primary);
+}
+
+.tracker-table tr:hover {
+  background: var(--bg-hover);
+}
+
+.tracker-url {
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tracker-status {
+  font-weight: 500;
+}
+
+.tracker-status.status-working {
+  color: var(--success);
+}
+
+.tracker-status.status-updating--- {
+  color: var(--warning);
+}
+
+.tracker-status.status-error {
+  color: var(--state-error);
+}
+
+.tracker-status.status-not-contacted {
+  color: var(--text-secondary);
+}

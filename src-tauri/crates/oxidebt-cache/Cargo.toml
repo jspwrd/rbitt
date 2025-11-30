@@ -1,0 +1,16 @@
+[package]
+name = "oxidebt-cache"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+bytes = { workspace = true }
+dashmap = "6.1"
+parking_lot = { workspace = true }
+tokio = { workspace = true }
+crossbeam = "0.8"
+sha1 = { workspace = true }
+sha2 = { workspace = true }
+tracing = { workspace = true }

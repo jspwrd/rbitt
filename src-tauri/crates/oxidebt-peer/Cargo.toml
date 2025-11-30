@@ -1,0 +1,24 @@
+[package]
+name = "oxidebt-peer"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "BitTorrent peer wire protocol implementation"
+
+[dependencies]
+oxidebt-constants = { path = "../oxidebt-constants" }
+oxidebt-torrent = { path = "../oxidebt-torrent" }
+oxidebt-bencode = { path = "../oxidebt-bencode" }
+thiserror = { workspace = true }
+bytes = { workspace = true }
+tokio = { workspace = true }
+rand = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+futures = { workspace = true }
+hex = { workspace = true }
+sha1 = { workspace = true }
+socket2 = "0.5"
+
+[dev-dependencies]
