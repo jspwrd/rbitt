@@ -30,6 +30,8 @@ interface SettingsModalProps {
   onDisconnectOnCompleteChange: (enabled: boolean) => void;
   onApplyBandwidthLimits: () => void;
   onApplyQueueSettings: () => void;
+  useStatusIndicators: boolean;
+  onUseStatusIndicatorsChange: (enabled: boolean) => void;
   onClose: () => void;
   onError: (error: string) => void;
 }
@@ -56,6 +58,8 @@ export function SettingsModal({
   onDisconnectOnCompleteChange,
   onApplyBandwidthLimits,
   onApplyQueueSettings,
+  useStatusIndicators,
+  onUseStatusIndicatorsChange,
   onClose,
   onError,
 }: SettingsModalProps) {
@@ -303,11 +307,30 @@ export function SettingsModal({
 
           <div className="settings-content">
             {activeTab === "general" && (
-              <div className="settings-section">
-                <h3>About</h3>
-                <p>RBitt v0.1.0</p>
-                <p className="text-secondary">A modern BitTorrent client built with Rust and Tauri.</p>
-              </div>
+              <>
+                <div className="settings-section">
+                  <h3>About</h3>
+                  <p>RBitt v0.1.0</p>
+                  <p className="text-secondary">A modern BitTorrent client built with Rust and Tauri.</p>
+                </div>
+
+                <div className="settings-section">
+                  <h3>Appearance</h3>
+                  <div className="setting-row checkbox-row">
+                    <label className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={useStatusIndicators}
+                        onChange={(e) => onUseStatusIndicatorsChange(e.target.checked)}
+                      />
+                      <span>Use animated status indicators instead of icons</span>
+                    </label>
+                  </div>
+                  <p className="text-secondary setting-note">
+                    Shows pulsing colored dots to indicate torrent status instead of static icons.
+                  </p>
+                </div>
+              </>
             )}
 
             {activeTab === "downloads" && (

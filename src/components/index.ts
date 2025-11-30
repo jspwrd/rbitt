@@ -4,6 +4,7 @@ export { Toolbar } from "./Toolbar";
 export { TorrentList } from "./TorrentList";
 export { DetailPanel } from "./DetailPanel";
 export { StatusBar } from "./StatusBar";
+export { StatusIndicator } from "./StatusIndicator";
 export { AddTorrentModal } from "./AddTorrentModal";
 export { SettingsModal } from "./SettingsModal";
 export { RssModal } from "./RssModal";

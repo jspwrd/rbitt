@@ -76,6 +76,9 @@ function App() {
   const [showRssModal, setShowRssModal] = useState(false);
   const [showSearchModal, setShowSearchModal] = useState(false);
 
+  // UI preferences
+  const [useStatusIndicators, setUseStatusIndicators] = useState(false);
+
   // Detail panel data
   const [trackerInfo, setTrackerInfo] = useState<TrackerStatusInfo[]>([]);
   const [peerInfo, setPeerInfo] = useState<PeerStatusInfo[]>([]);
@@ -572,6 +575,7 @@ function App() {
               }
             }}
             onAddClick={() => setShowAddModal(true)}
+            useStatusIndicators={useStatusIndicators}
           />
 
           {selectedTorrentData && (
@@ -628,6 +632,8 @@ function App() {
           onDisconnectOnCompleteChange={toggleDisconnectOnComplete}
           onApplyBandwidthLimits={applyBandwidthLimits}
           onApplyQueueSettings={applyQueueSettings}
+          useStatusIndicators={useStatusIndicators}
+          onUseStatusIndicatorsChange={setUseStatusIndicators}
           onClose={() => setShowSettings(false)}
           onError={setError}
         />

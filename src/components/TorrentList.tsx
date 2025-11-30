@@ -1,4 +1,5 @@
 import { Icons } from "./Icons";
+import { StatusIndicator } from "./StatusIndicator";
 import {
   formatBytes,
   formatSpeed,
@@ -6,6 +7,7 @@ import {
   formatState,
   getStateColor,
   isDownloading,
+  isUploading,
   isPaused,
   isChecking,
   isCompleted,
@@ -14,12 +16,27 @@ import {
 } from "../utils";
 import type { TorrentStatus } from "../types";
 
+// Get the relevant speed for the status indicator based on torrent state
+function getRelevantSpeed(torrent: TorrentStatus): number {
+  // For uploading states, use upload rate
+  if (isUploading(torrent.state) || torrent.state === 'uploading' || torrent.state === 'forcedUP') {
+    return torrent.upload_rate;
+  }
+  // For downloading states (including metadata), use download rate
+  if (isDownloading(torrent.state)) {
+    return torrent.download_rate;
+  }
+  // For other states, return 0 (no pulse or steady pulse)
+  return 0;
+}
+
 interface TorrentListProps {
   torrents: TorrentStatus[];
   selectedTorrent: string | null;
   onSelect: (infoHash: string) => void;
   onDoubleClick: (torrent: TorrentStatus) => void;
   onAddClick: () => void;
+  useStatusIndicators?: boolean;
 }
 
 function getStateIcon(state: string) {
@@ -62,6 +79,7 @@ export function TorrentList({
   onSelect,
   onDoubleClick,
   onAddClick,
+  useStatusIndicators = false,
 }: TorrentListProps) {
   return (
     <div className="torrent-list-container">
@@ -101,12 +119,20 @@ export function TorrentList({
               >
                 <td className="col-name">
                   <div className="torrent-name-cell">
-                    <span
-                      className={`state-icon ${isChecking(torrent.state) ? "spinning" : ""}`}
-                      style={{ color: getStateColor(torrent.state) }}
-                    >
-                      {getStateIcon(torrent.state)}
-                    </span>
+                    {useStatusIndicators ? (
+                      <StatusIndicator
+                        status={torrent.state as any}
+                        showLabel={false}
+                        speed={getRelevantSpeed(torrent)}
+                      />
+                    ) : (
+                      <span
+                        className={`state-icon ${isChecking(torrent.state) ? "spinning" : ""}`}
+                        style={{ color: getStateColor(torrent.state) }}
+                      >
+                        {getStateIcon(torrent.state)}
+                      </span>
+                    )}
                     <span className="torrent-name" title={torrent.name}>
                       {torrent.name}
                     </span>
