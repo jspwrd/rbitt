@@ -191,9 +191,11 @@ impl PieceCache {
             self.replace(&key, false);
             let (new_size, old_size) = self.t2.write().insert(key, piece);
             if new_size > old_size {
-                self.memory_used.fetch_add(new_size - old_size, Ordering::Relaxed);
+                self.memory_used
+                    .fetch_add(new_size - old_size, Ordering::Relaxed);
             } else {
-                self.memory_used.fetch_sub(old_size - new_size, Ordering::Relaxed);
+                self.memory_used
+                    .fetch_sub(old_size - new_size, Ordering::Relaxed);
             }
             return;
         }
@@ -205,9 +207,11 @@ impl PieceCache {
             self.replace(&key, true);
             let (new_size, old_size) = self.t2.write().insert(key, piece);
             if new_size > old_size {
-                self.memory_used.fetch_add(new_size - old_size, Ordering::Relaxed);
+                self.memory_used
+                    .fetch_add(new_size - old_size, Ordering::Relaxed);
             } else {
-                self.memory_used.fetch_sub(old_size - new_size, Ordering::Relaxed);
+                self.memory_used
+                    .fetch_sub(old_size - new_size, Ordering::Relaxed);
             }
             return;
         }
@@ -235,9 +239,11 @@ impl PieceCache {
 
         let (new_size, old_size) = self.t1.write().insert(key, piece);
         if new_size > old_size {
-            self.memory_used.fetch_add(new_size - old_size, Ordering::Relaxed);
+            self.memory_used
+                .fetch_add(new_size - old_size, Ordering::Relaxed);
         } else {
-            self.memory_used.fetch_sub(old_size - new_size, Ordering::Relaxed);
+            self.memory_used
+                .fetch_sub(old_size - new_size, Ordering::Relaxed);
         }
     }
 

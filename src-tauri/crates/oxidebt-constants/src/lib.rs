@@ -1,4 +1,3 @@
-
 use std::time::Duration;
 
 pub const CLIENT_PREFIX: &str = "-OX0001-";

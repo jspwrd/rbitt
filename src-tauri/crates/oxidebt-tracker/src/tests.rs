@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::response::{Peer, ScrapeStats};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -21,10 +20,7 @@ fn test_tracker_event_u32() {
 
 #[test]
 fn test_peer_from_compact_v4() {
-    let data = [
-        127, 0, 0, 1, 0x1A, 0xE1,
-        192, 168, 1, 1, 0x1A, 0xE2,
-    ];
+    let data = [127, 0, 0, 1, 0x1A, 0xE1, 192, 168, 1, 1, 0x1A, 0xE2];
 
     let peers = Peer::from_compact_v4(&data);
     assert_eq!(peers.len(), 2);

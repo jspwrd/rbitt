@@ -223,7 +223,10 @@ impl BlockCache {
 
     pub fn is_piece_complete(&self, info_hash: &str, piece_index: u32) -> bool {
         let key = (info_hash.to_string(), piece_index);
-        self.pieces.get(&key).map(|p| p.is_complete()).unwrap_or(false)
+        self.pieces
+            .get(&key)
+            .map(|p| p.is_complete())
+            .unwrap_or(false)
     }
 
     pub fn memory_used(&self) -> usize {

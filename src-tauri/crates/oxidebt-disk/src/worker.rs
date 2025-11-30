@@ -30,7 +30,12 @@ impl IoWorker {
         }
     }
 
-    pub fn register_torrent(&mut self, torrent_hash: String, base_path: PathBuf, files: Vec<PathBuf>) {
+    pub fn register_torrent(
+        &mut self,
+        torrent_hash: String,
+        base_path: PathBuf,
+        files: Vec<PathBuf>,
+    ) {
         self.base_paths.insert(torrent_hash.clone(), base_path);
         self.file_paths.insert(torrent_hash, files);
     }
@@ -75,20 +80,17 @@ impl IoWorker {
     }
 
     fn get_file_path(&self, torrent_hash: &str, file_index: usize) -> std::io::Result<PathBuf> {
-        let base = self
-            .base_paths
-            .get(torrent_hash)
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "torrent not registered"))?;
+        let base = self.base_paths.get(torrent_hash).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "torrent not registered")
+        })?;
 
-        let files = self
-            .file_paths
-            .get(torrent_hash)
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "torrent not registered"))?;
+        let files = self.file_paths.get(torrent_hash).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "torrent not registered")
+        })?;
 
-        files
-            .get(file_index)
-            .map(|p| base.join(p))
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "file index out of range"))
+        files.get(file_index).map(|p| base.join(p)).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "file index out of range")
+        })
     }
 
     async fn open_file_for_write(&self, path: &PathBuf) -> std::io::Result<File> {

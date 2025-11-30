@@ -142,7 +142,8 @@ impl RateCalculator {
             self.smoothed_rate = self.instant_rate;
         } else {
             // Normal EMA: new_value = alpha * current + (1 - alpha) * previous
-            self.smoothed_rate = EMA_ALPHA * self.instant_rate + (1.0 - EMA_ALPHA) * self.smoothed_rate;
+            self.smoothed_rate =
+                EMA_ALPHA * self.instant_rate + (1.0 - EMA_ALPHA) * self.smoothed_rate;
         }
     }
 
@@ -291,7 +292,12 @@ mod tests {
         let rate2 = calc.rate();
 
         // Rate should decrease smoothly, not jump
-        assert!(rate2 <= rate1, "Rate should decrease: {} vs {}", rate2, rate1);
+        assert!(
+            rate2 <= rate1,
+            "Rate should decrease: {} vs {}",
+            rate2,
+            rate1
+        );
     }
 
     #[test]
@@ -311,6 +317,11 @@ mod tests {
         let rate2 = calc.rate();
 
         // Rate should have decayed significantly since samples are outside window
-        assert!(rate2 < rate1 * 0.9, "Rate should decay: {} vs {}", rate2, rate1);
+        assert!(
+            rate2 < rate1 * 0.9,
+            "Rate should decay: {} vs {}",
+            rate2,
+            rate1
+        );
     }
 }

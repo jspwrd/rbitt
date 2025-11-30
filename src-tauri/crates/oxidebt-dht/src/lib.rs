@@ -1,4 +1,3 @@
-
 mod error;
 mod message;
 mod node;

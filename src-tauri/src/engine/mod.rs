@@ -4,11 +4,18 @@ mod metadata;
 mod peer_connection;
 mod peer_info;
 mod pex;
+pub mod rss;
+pub mod search;
+pub mod settings;
 mod stats;
 mod torrent;
 mod tracker_info;
+pub mod watch;
 
 pub use error::EngineError;
+pub use rss::{RssDownloadRule, RssFeed};
+pub use search::SearchStatus;
+pub use settings::{FilePriority, LimitAction, WatchFolder};
 pub use torrent::TorrentState;
 
 use events::PeerEvent;
@@ -16,12 +23,12 @@ use metadata::fetch_metadata_from_peers;
 use oxidebt_constants::{
     CHECKING_SLEEP_INTERVAL, CONNECTION_RETRY_SLEEP, CONNECTION_TIMEOUT, DEFAULT_PORT,
     DHT_INTERVAL_CRITICAL, DHT_INTERVAL_HIGH, DHT_INTERVAL_LOW, DHT_INTERVAL_MEDIUM,
-    DHT_QUERY_SLEEP, LSD_ANNOUNCE_INTERVAL, MAX_GLOBAL_CONNECTIONS,
-    MAX_HALF_OPEN, MAX_PEERS_PER_TORRENT, MAX_PEER_RETRY_ATTEMPTS, MAX_UNCHOKED_PEERS,
-    OPTIMISTIC_UNCHOKE_INTERVAL, PAUSED_SLEEP_INTERVAL, PEER_THRESHOLD_CRITICAL,
-    PEER_THRESHOLD_LOW, PEER_THRESHOLD_MEDIUM, TRACKER_AGGRESSIVE_INTERVAL,
-    TRACKER_ANNOUNCE_INTERVAL, TRACKER_MIN_INTERVAL, TRACKER_MODERATE_INTERVAL,
-    LOOP_INTERVAL_FAST, LOOP_INTERVAL_NORMAL, LOOP_INTERVAL_STABLE,
+    DHT_QUERY_SLEEP, LOOP_INTERVAL_FAST, LOOP_INTERVAL_NORMAL, LOOP_INTERVAL_STABLE,
+    LSD_ANNOUNCE_INTERVAL, MAX_GLOBAL_CONNECTIONS, MAX_HALF_OPEN, MAX_PEERS_PER_TORRENT,
+    MAX_PEER_RETRY_ATTEMPTS, MAX_UNCHOKED_PEERS, OPTIMISTIC_UNCHOKE_INTERVAL,
+    PAUSED_SLEEP_INTERVAL, PEER_THRESHOLD_CRITICAL, PEER_THRESHOLD_LOW, PEER_THRESHOLD_MEDIUM,
+    TRACKER_AGGRESSIVE_INTERVAL, TRACKER_ANNOUNCE_INTERVAL, TRACKER_MIN_INTERVAL,
+    TRACKER_MODERATE_INTERVAL,
 };
 use oxidebt_dht::DhtServer;
 use oxidebt_disk::{DiskManager, FileEntry, PieceInfo, TorrentStorage};
@@ -66,8 +73,25 @@ pub struct TorrentEngine {
     no_seed_mode: Arc<AtomicBool>,
     /// When enabled, disconnect all peers when a torrent completes (only applies when no_seed_mode is enabled)
     disconnect_on_complete: Arc<AtomicBool>,
+    /// Categories for torrent organization
+    categories: Arc<RwLock<HashMap<String, settings::Category>>>,
+    /// Auto-add tracker settings
+    auto_tracker_settings: Arc<RwLock<settings::AutoTrackerSettings>>,
+    /// Move on completion settings
+    move_on_complete_settings: Arc<RwLock<settings::MoveOnCompleteSettings>>,
+    /// External program settings
+    external_program_settings: Arc<RwLock<settings::ExternalProgramSettings>>,
+    /// Default share limits for new torrents
+    default_share_limits: Arc<RwLock<settings::ShareLimits>>,
+    /// Watch folder manager
+    watch_manager: Arc<watch::WatchFolderManager>,
+    /// RSS manager
+    rss_manager: Arc<rss::RssManager>,
+    /// Search engine
+    search_engine: Arc<search::SearchEngine>,
 }
 
+#[allow(dead_code)]
 impl TorrentEngine {
     /// Creates a new TorrentEngine with the specified download directory.
     pub async fn new(download_dir: PathBuf) -> Result<Self, EngineError> {
@@ -127,9 +151,25 @@ impl TorrentEngine {
 
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
+        // Create watch folder manager
+        let (watch_manager, watch_rx) = watch::WatchFolderManager::new();
+        let watch_manager = Arc::new(watch_manager);
+
+        // Create RSS manager
+        let (rss_manager, rss_rx) = rss::RssManager::new();
+        let rss_manager = Arc::new(rss_manager);
+
+        // Create search engine
+        let plugin_dir = download_dir
+            .parent()
+            .unwrap_or(&download_dir)
+            .join(".rbitt")
+            .join("search_plugins");
+        let search_engine = Arc::new(search::SearchEngine::new(plugin_dir));
+
         let engine = Self {
             peer_id,
-            download_dir,
+            download_dir: download_dir.clone(),
             listen_port,
             torrents: Arc::new(RwLock::new(HashMap::new())),
             tracker_client: Arc::new(TrackerClient::new()),
@@ -145,11 +185,267 @@ impl TorrentEngine {
             max_active_uploads: Arc::new(AtomicUsize::new(5)),
             no_seed_mode: Arc::new(AtomicBool::new(false)),
             disconnect_on_complete: Arc::new(AtomicBool::new(false)),
+            categories: Arc::new(RwLock::new(HashMap::new())),
+            auto_tracker_settings: Arc::new(RwLock::new(settings::AutoTrackerSettings::default())),
+            move_on_complete_settings: Arc::new(RwLock::new(
+                settings::MoveOnCompleteSettings::default(),
+            )),
+            external_program_settings: Arc::new(RwLock::new(
+                settings::ExternalProgramSettings::default(),
+            )),
+            default_share_limits: Arc::new(RwLock::new(settings::ShareLimits::default())),
+            watch_manager: watch_manager.clone(),
+            rss_manager: rss_manager.clone(),
+            search_engine,
         };
 
         engine.start_background_tasks();
+        engine.start_watch_folder_processor(watch_rx);
+        engine.start_rss_processor(rss_rx);
+        engine.start_share_limits_checker();
+
+        // Start watch folder and RSS managers
+        watch_manager.start();
+        rss_manager.start();
 
         Ok(engine)
+    }
+
+    /// Start processing watch folder events
+    fn start_watch_folder_processor(&self, mut rx: mpsc::UnboundedReceiver<watch::WatchEvent>) {
+        let torrents = self.torrents.clone();
+        let download_dir = self.download_dir.clone();
+        let categories = self.categories.clone();
+        let auto_trackers = self.auto_tracker_settings.clone();
+        let default_limits = self.default_share_limits.clone();
+
+        // We need a way to add torrents from the watch folder
+        // For now, store events and process them
+        tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                match event {
+                    watch::WatchEvent::TorrentFound {
+                        path,
+                        category,
+                        tags,
+                        ..
+                    } => {
+                        tracing::info!("Watch folder: Found torrent file {:?}", path);
+                        // Read and parse torrent file
+                        match tokio::fs::read(&path).await {
+                            Ok(data) => {
+                                match oxidebt_torrent::Metainfo::from_bytes(&data) {
+                                    Ok(meta) => {
+                                        // Add auto-trackers
+                                        let auto_settings = auto_trackers.read();
+                                        if auto_settings.enabled {
+                                            for tracker in &auto_settings.trackers {
+                                                if !meta.tracker_urls().contains(tracker) {
+                                                    // Note: We can't easily add trackers to parsed metainfo
+                                                    // This would require modifying the metainfo struct
+                                                    tracing::debug!(
+                                                        "Would add tracker: {}",
+                                                        tracker
+                                                    );
+                                                }
+                                            }
+                                        }
+
+                                        // Determine save path based on category
+                                        let save_path = if let Some(ref cat_name) = category {
+                                            let cats = categories.read();
+                                            cats.get(cat_name)
+                                                .map(|c| c.save_path.clone())
+                                                .unwrap_or_else(|| download_dir.clone())
+                                        } else {
+                                            download_dir.clone()
+                                        };
+
+                                        let hash = match &meta.info_hash {
+                                            oxidebt_torrent::InfoHash::V1(h) => h.to_hex(),
+                                            oxidebt_torrent::InfoHash::V2(h) => h.to_hex(),
+                                            oxidebt_torrent::InfoHash::Hybrid { v1, .. } => {
+                                                v1.to_hex()
+                                            }
+                                        };
+
+                                        tracing::info!(
+                                            "Watch folder: Adding torrent '{}' ({})",
+                                            meta.info.name,
+                                            hash
+                                        );
+
+                                        let mut managed =
+                                            ManagedTorrent::with_save_path(meta, save_path);
+                                        managed.category = category;
+                                        managed.tags = tags.into_iter().collect();
+                                        managed.share_limits = default_limits.read().clone();
+
+                                        torrents.write().insert(hash, managed);
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Watch folder: Failed to parse {:?}: {}",
+                                            path,
+                                            e
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("Watch folder: Failed to read {:?}: {}", path, e);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /// Start processing RSS match events
+    fn start_rss_processor(&self, mut rx: mpsc::UnboundedReceiver<rss::RssMatchEvent>) {
+        let torrents = self.torrents.clone();
+        let download_dir = self.download_dir.clone();
+        let categories = self.categories.clone();
+        let default_limits = self.default_share_limits.clone();
+
+        tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                tracing::info!(
+                    "RSS: Matched '{}' from feed {} with rule {}",
+                    event.item.title,
+                    event.feed_id,
+                    event.rule_id
+                );
+
+                let torrent_url = &event.item.torrent_url;
+
+                // Determine save path
+                let save_path = if let Some(ref path) = event.save_path {
+                    PathBuf::from(path)
+                } else if let Some(ref cat_name) = event.category {
+                    let cats = categories.read();
+                    cats.get(cat_name)
+                        .map(|c| c.save_path.clone())
+                        .unwrap_or_else(|| download_dir.clone())
+                } else {
+                    download_dir.clone()
+                };
+
+                // Handle magnet links vs torrent URLs
+                if torrent_url.starts_with("magnet:") {
+                    // TODO: Add magnet link support in RSS processor
+                    tracing::info!("RSS: Would add magnet: {}", torrent_url);
+                } else {
+                    // Download torrent file
+                    match reqwest::get(torrent_url).await {
+                        Ok(response) => match response.bytes().await {
+                            Ok(data) => match oxidebt_torrent::Metainfo::from_bytes(&data) {
+                                Ok(meta) => {
+                                    let hash = match &meta.info_hash {
+                                        oxidebt_torrent::InfoHash::V1(h) => h.to_hex(),
+                                        oxidebt_torrent::InfoHash::V2(h) => h.to_hex(),
+                                        oxidebt_torrent::InfoHash::Hybrid { v1, .. } => v1.to_hex(),
+                                    };
+
+                                    tracing::info!(
+                                        "RSS: Adding torrent '{}' ({})",
+                                        meta.info.name,
+                                        hash
+                                    );
+
+                                    let mut managed =
+                                        ManagedTorrent::with_save_path(meta, save_path);
+                                    managed.category = event.category;
+                                    managed.tags = event.tags.into_iter().collect();
+                                    managed.share_limits = default_limits.read().clone();
+
+                                    if event.add_paused {
+                                        managed.state = TorrentState::Paused;
+                                    }
+
+                                    torrents.write().insert(hash, managed);
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "RSS: Failed to parse torrent from {}: {}",
+                                        torrent_url,
+                                        e
+                                    );
+                                }
+                            },
+                            Err(e) => {
+                                tracing::warn!(
+                                    "RSS: Failed to read torrent from {}: {}",
+                                    torrent_url,
+                                    e
+                                );
+                            }
+                        },
+                        Err(e) => {
+                            tracing::warn!(
+                                "RSS: Failed to download torrent from {}: {}",
+                                torrent_url,
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /// Start checking share limits periodically
+    fn start_share_limits_checker(&self) {
+        let torrents = self.torrents.clone();
+
+        tokio::spawn(async move {
+            let check_interval = Duration::from_secs(60);
+
+            loop {
+                tokio::time::sleep(check_interval).await;
+
+                let mut actions: Vec<(String, settings::LimitAction)> = Vec::new();
+
+                {
+                    let guard = torrents.read();
+                    for (hash, torrent) in guard.iter() {
+                        if matches!(
+                            torrent.state,
+                            TorrentState::Seeding | TorrentState::Completed
+                        ) {
+                            if torrent.share_limits_reached() {
+                                actions.push((hash.clone(), torrent.share_limits.limit_action));
+                            }
+                        }
+                    }
+                }
+
+                for (hash, action) in actions {
+                    match action {
+                        settings::LimitAction::Pause => {
+                            let mut guard = torrents.write();
+                            if let Some(torrent) = guard.get_mut(&hash) {
+                                tracing::info!("Share limit reached for {}, pausing", hash);
+                                torrent.state = TorrentState::Paused;
+                            }
+                        }
+                        settings::LimitAction::Remove => {
+                            tracing::info!(
+                                "Share limit reached for {}, removing (keeping files)",
+                                hash
+                            );
+                            torrents.write().remove(&hash);
+                        }
+                        settings::LimitAction::RemoveWithFiles => {
+                            tracing::info!("Share limit reached for {}, removing with files", hash);
+                            // TODO: Actually delete files
+                            torrents.write().remove(&hash);
+                        }
+                    }
+                }
+            }
+        });
     }
 
     fn start_background_tasks(&self) {
@@ -304,16 +600,15 @@ impl TorrentEngine {
                         let mut torrents = torrents.write();
                         if let Some(torrent) = torrents.get_mut(&torrent_hash) {
                             torrent.piece_manager.mark_piece_complete(piece_index);
-                            tracing::debug!(
-                                "Piece {} completed for {}",
-                                piece_index,
-                                torrent_hash,
-                            );
+                            tracing::debug!("Piece {} completed for {}", piece_index, torrent_hash,);
 
                             if torrent.piece_manager.is_complete()
                                 && torrent.state == TorrentState::Downloading
                             {
                                 torrent.state = TorrentState::Completed;
+                                if torrent.seeding_started_at.is_none() {
+                                    torrent.seeding_started_at = Some(Instant::now());
+                                }
                                 tracing::info!("Torrent {} download complete!", torrent_hash);
 
                                 // If no_seed_mode and disconnect_on_complete are both enabled,
@@ -452,7 +747,12 @@ impl TorrentEngine {
                     torrents
                         .values()
                         .filter(|t| {
-                            matches!(t.state, TorrentState::Downloading | TorrentState::Seeding | TorrentState::Completed)
+                            matches!(
+                                t.state,
+                                TorrentState::Downloading
+                                    | TorrentState::Seeding
+                                    | TorrentState::Completed
+                            )
                         })
                         .filter_map(|t| t.info_hash_bytes())
                         .collect()
@@ -480,15 +780,14 @@ impl TorrentEngine {
             loop {
                 match rx.recv().await {
                     Ok(announce) => {
-                        let info_hash_hex =
-                            announce
-                                .info_hash
-                                .iter()
-                                .fold(String::with_capacity(40), |mut s, b| {
-                                    use std::fmt::Write;
-                                    let _ = write!(s, "{:02x}", b);
-                                    s
-                                });
+                        let info_hash_hex = announce.info_hash.iter().fold(
+                            String::with_capacity(40),
+                            |mut s, b| {
+                                use std::fmt::Write;
+                                let _ = write!(s, "{:02x}", b);
+                                s
+                            },
+                        );
 
                         let mut torrents = torrents.write();
                         if let Some(torrent) = torrents.get_mut(&info_hash_hex) {
@@ -529,7 +828,12 @@ impl TorrentEngine {
                         torrents
                             .values()
                             .filter(|t| {
-                                matches!(t.state, TorrentState::Downloading | TorrentState::Seeding | TorrentState::Completed)
+                                matches!(
+                                    t.state,
+                                    TorrentState::Downloading
+                                        | TorrentState::Seeding
+                                        | TorrentState::Completed
+                                )
                             })
                             .filter_map(|t| t.info_hash_bytes())
                             .collect()
@@ -677,9 +981,7 @@ impl TorrentEngine {
                     let torrents = torrents.read();
                     torrents
                         .iter()
-                        .filter(|(_, t)| {
-                            t.state == TorrentState::Downloading
-                        })
+                        .filter(|(_, t)| t.state == TorrentState::Downloading)
                         .map(|(h, _)| h.clone())
                         .collect()
                 };
@@ -877,7 +1179,10 @@ impl TorrentEngine {
     /// and torrents will not transition to seeding state.
     pub fn set_no_seed_mode(&self, enabled: bool) {
         self.no_seed_mode.store(enabled, Ordering::Relaxed);
-        tracing::info!("No Seed Mode {}", if enabled { "enabled" } else { "disabled" });
+        tracing::info!(
+            "No Seed Mode {}",
+            if enabled { "enabled" } else { "disabled" }
+        );
     }
 
     /// Returns whether no seed mode is currently enabled.
@@ -888,8 +1193,12 @@ impl TorrentEngine {
     /// Sets disconnect on complete mode. When enabled along with no_seed_mode,
     /// all peers will be disconnected when a torrent completes.
     pub fn set_disconnect_on_complete(&self, enabled: bool) {
-        self.disconnect_on_complete.store(enabled, Ordering::Relaxed);
-        tracing::info!("Disconnect on Complete {}", if enabled { "enabled" } else { "disabled" });
+        self.disconnect_on_complete
+            .store(enabled, Ordering::Relaxed);
+        tracing::info!(
+            "Disconnect on Complete {}",
+            if enabled { "enabled" } else { "disabled" }
+        );
     }
 
     /// Returns whether disconnect on complete mode is currently enabled.
@@ -1012,8 +1321,8 @@ impl TorrentEngine {
             tracker_count
         );
 
-        let is_single_file =
-            meta.info.files.len() == 1 && meta.info.files[0].path.to_string_lossy() == meta.info.name;
+        let is_single_file = meta.info.files.len() == 1
+            && meta.info.files[0].path.to_string_lossy() == meta.info.name;
 
         let base_path = if is_single_file {
             self.download_dir.clone()
@@ -1103,11 +1412,7 @@ impl TorrentEngine {
             let piece_count = match disk_manager_for_verify.piece_count(&hash_for_verify) {
                 Ok(count) => count,
                 Err(e) => {
-                    tracing::warn!(
-                        "Failed to get piece count for {}: {}",
-                        hash_for_verify,
-                        e
-                    );
+                    tracing::warn!("Failed to get piece count for {}: {}", hash_for_verify, e);
                     let torrents = torrents_for_verify.read();
                     if let Some(torrent) = torrents.get(&hash_for_verify) {
                         torrent.piece_manager.mark_verification_complete();
@@ -1130,7 +1435,10 @@ impl TorrentEngine {
                     let dm = disk_manager_for_verify.clone();
                     let hash = hash_for_verify.clone();
                     futures.push(async move {
-                        (i as u32, dm.verify_piece(&hash, i as u32).await.unwrap_or(false))
+                        (
+                            i as u32,
+                            dm.verify_piece(&hash, i as u32).await.unwrap_or(false),
+                        )
                     });
                 }
 
@@ -1225,6 +1533,9 @@ impl TorrentEngine {
                             );
                         } else if is_complete {
                             torrent.state = TorrentState::Completed;
+                            if torrent.seeding_started_at.is_none() {
+                                torrent.seeding_started_at = Some(Instant::now());
+                            }
                             tracing::info!(
                                 "Verification done: Torrent {} is complete, transitioning to Completed (position {})",
                                 hash_for_verify,
@@ -1384,6 +1695,9 @@ impl TorrentEngine {
                             );
                         } else if is_complete {
                             torrent.state = TorrentState::Completed;
+                            if torrent.seeding_started_at.is_none() {
+                                torrent.seeding_started_at = Some(Instant::now());
+                            }
                             tracing::info!(
                                 "Torrent {} (V2-only) transitioning to Completed (position {})",
                                 hash,
@@ -1563,6 +1877,9 @@ impl TorrentEngine {
                         );
                     } else if is_complete {
                         torrent.state = TorrentState::Completed;
+                        if torrent.seeding_started_at.is_none() {
+                            torrent.seeding_started_at = Some(Instant::now());
+                        }
                         tracing::info!(
                             "Torrent {} is complete, transitioning to Completed (position {})",
                             hash,
@@ -1639,7 +1956,10 @@ impl TorrentEngine {
                     return;
                 };
                 match torrent.state {
-                    TorrentState::Paused | TorrentState::Queued | TorrentState::Error | TorrentState::Moving => None,
+                    TorrentState::Paused
+                    | TorrentState::Queued
+                    | TorrentState::Error
+                    | TorrentState::Moving => None,
                     TorrentState::MetadataDownloading | TorrentState::Checking => Some((
                         torrent.state,
                         torrent.meta.piece_count(),
@@ -1721,23 +2041,47 @@ impl TorrentEngine {
             let peer_states = {
                 let torrents = torrents.read();
                 if let Some(torrent) = torrents.get(&hash) {
-                    let unchoked_count = torrent.peers.values().filter(|p| !p.is_choking_us).count();
-                    let interested_count = torrent.peers.values().filter(|p| p.is_interested).count();
-                    let with_bitfield = torrent.peers.values().filter(|p| p.bitfield.is_some()).count();
-                    let seeds = torrent.peers.values().filter(|p| {
-                        p.bitfield.as_ref().map(|bf| bf.is_complete()).unwrap_or(false)
-                    }).count();
+                    let unchoked_count =
+                        torrent.peers.values().filter(|p| !p.is_choking_us).count();
+                    let interested_count =
+                        torrent.peers.values().filter(|p| p.is_interested).count();
+                    let with_bitfield = torrent
+                        .peers
+                        .values()
+                        .filter(|p| p.bitfield.is_some())
+                        .count();
+                    let seeds = torrent
+                        .peers
+                        .values()
+                        .filter(|p| {
+                            p.bitfield
+                                .as_ref()
+                                .map(|bf| bf.is_complete())
+                                .unwrap_or(false)
+                        })
+                        .count();
                     let active_pieces = torrent.piece_manager.active_piece_count();
                     let have_count = torrent.piece_manager.have_count();
                     let piece_count = torrent.meta.piece_count();
                     let download_rate = torrent.stats.download_rate;
-                    Some((unchoked_count, interested_count, with_bitfield, seeds, active_pieces, have_count, piece_count, download_rate))
+                    Some((
+                        unchoked_count,
+                        interested_count,
+                        with_bitfield,
+                        seeds,
+                        active_pieces,
+                        have_count,
+                        piece_count,
+                        download_rate,
+                    ))
                 } else {
                     None
                 }
             };
 
-            if let Some((unchoked, interested, with_bf, seeds, active, have, total, dl_rate)) = peer_states {
+            if let Some((unchoked, interested, with_bf, seeds, active, have, total, dl_rate)) =
+                peer_states
+            {
                 tracing::info!(
                     "[DIAG] {} | peers: conn={} half={} queue={} | state: unchoked={} interested_in_us={} seeds={} bf={} | pieces: {}/{} active={} | speed: {:.1} KB/s | global={}",
                     &hash[..8],
@@ -1760,7 +2104,10 @@ impl TorrentEngine {
             let available_slots = {
                 let mut torrents = torrents.write();
                 if let Some(torrent) = torrents.get_mut(&hash) {
-                    torrent.connection_limiter.available_slots().min(global_slots)
+                    torrent
+                        .connection_limiter
+                        .available_slots()
+                        .min(global_slots)
                 } else {
                     0
                 }
@@ -1772,15 +2119,16 @@ impl TorrentEngine {
             let need_more_peers = connected_peers < MAX_PEERS_PER_TORRENT;
             let can_open_more = connecting_peers < MAX_HALF_OPEN;
 
-            if need_more_peers && can_open_more && !peers_to_connect.is_empty() && available_slots > 0 {
+            if need_more_peers
+                && can_open_more
+                && !peers_to_connect.is_empty()
+                && available_slots > 0
+            {
                 // Limit by both how many peers we need and how many half-open slots we have
                 let peer_slots = MAX_PEERS_PER_TORRENT.saturating_sub(connected_peers);
                 let half_open_slots = MAX_HALF_OPEN.saturating_sub(connecting_peers);
                 let to_connect = peer_slots.min(half_open_slots).min(available_slots);
-                let peers: Vec<_> = peers_to_connect
-                    .into_iter()
-                    .take(to_connect)
-                    .collect();
+                let peers: Vec<_> = peers_to_connect.into_iter().take(to_connect).collect();
                 tracing::info!(
                     "Connecting to {} new peers for torrent {}",
                     peers.len(),
@@ -1853,7 +2201,9 @@ impl TorrentEngine {
                                 // Decrement global connection counter on connection failure
                                 global_conns.fetch_sub(1, Ordering::Relaxed);
                                 // Categorize the error for diagnostics
-                                let error_type = if e.to_string().contains("timed out") || e.to_string().contains("Timeout") {
+                                let error_type = if e.to_string().contains("timed out")
+                                    || e.to_string().contains("Timeout")
+                                {
                                     "TIMEOUT"
                                 } else if e.to_string().contains("refused") {
                                     "REFUSED"
@@ -1864,7 +2214,13 @@ impl TorrentEngine {
                                 } else {
                                     "OTHER"
                                 };
-                                tracing::debug!("[CONN-FAIL] {} -> {} | {}: {}", peer_addr, error_type, error_type, e);
+                                tracing::debug!(
+                                    "[CONN-FAIL] {} -> {} | {}: {}",
+                                    peer_addr,
+                                    error_type,
+                                    error_type,
+                                    e
+                                );
                                 let mut torrents = torrents_clone.write();
                                 if let Some(torrent) = torrents.get_mut(&hash_clone) {
                                     torrent.connecting_peers.remove(&peer_addr);
@@ -1905,6 +2261,10 @@ impl TorrentEngine {
                         && torrent.state == TorrentState::Downloading
                     {
                         torrent.state = TorrentState::Completed;
+                        // Start tracking seeding time
+                        if torrent.seeding_started_at.is_none() {
+                            torrent.seeding_started_at = Some(Instant::now());
+                        }
                         tracing::info!(
                             "Torrent {} download complete, transitioning to Completed",
                             hash
@@ -1913,10 +2273,7 @@ impl TorrentEngine {
 
                     // Handle Seeding <-> Completed transitions based on peer interest
                     if torrent.piece_manager.is_complete() {
-                        let peers_interested = torrent
-                            .peers
-                            .values()
-                            .any(|p| p.is_interested);
+                        let peers_interested = torrent.peers.values().any(|p| p.is_interested);
 
                         if torrent.state == TorrentState::Seeding && !peers_interested {
                             torrent.state = TorrentState::Completed;
@@ -1924,8 +2281,15 @@ impl TorrentEngine {
                                 "Torrent {} has no interested peers, transitioning to Completed",
                                 hash
                             );
-                        } else if torrent.state == TorrentState::Completed && peers_interested && !no_seed_mode.load(Ordering::Relaxed) {
+                        } else if torrent.state == TorrentState::Completed
+                            && peers_interested
+                            && !no_seed_mode.load(Ordering::Relaxed)
+                        {
                             torrent.state = TorrentState::Seeding;
+                            // Start tracking seeding time if not already started
+                            if torrent.seeding_started_at.is_none() {
+                                torrent.seeding_started_at = Some(Instant::now());
+                            }
                             tracing::info!(
                                 "Torrent {} has interested peers, transitioning to Seeding",
                                 hash
@@ -2021,11 +2385,7 @@ impl TorrentEngine {
                         if let Ok(response) = tracker_client_clone.announce(params).await {
                             let peer_count = response.peers.len() + response.peers6.len();
                             if peer_count > 0 {
-                                tracing::debug!(
-                                    "Re-announce to {} got {} peers",
-                                    url,
-                                    peer_count
-                                );
+                                tracing::debug!("Re-announce to {} got {} peers", url, peer_count);
                                 let mut torrents = torrents_clone.write();
                                 if let Some(torrent) = torrents.get_mut(&hash_clone) {
                                     for peer in response.peers.iter().chain(response.peers6.iter())
@@ -2255,6 +2615,9 @@ impl TorrentEngine {
 
             if is_complete {
                 torrent.state = TorrentState::Completed;
+                if torrent.seeding_started_at.is_none() {
+                    torrent.seeding_started_at = Some(Instant::now());
+                }
             } else {
                 torrent.state = TorrentState::Downloading;
             }
@@ -2490,6 +2853,508 @@ impl TorrentEngine {
             active_torrents,
             total_peers,
             global_connections: self.global_connections.load(Ordering::Relaxed),
+        }
+    }
+
+    // ========== Sequential Download ==========
+
+    /// Set sequential download mode for a torrent
+    pub fn set_sequential_download(&self, hash: &str, enabled: bool) -> bool {
+        let mut torrents = self.torrents.write();
+        if let Some(torrent) = torrents.get_mut(hash) {
+            torrent.sequential_download = enabled;
+            tracing::info!(
+                "Sequential download for {}: {}",
+                &hash[..8.min(hash.len())],
+                enabled
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get sequential download mode for a torrent
+    pub fn get_sequential_download(&self, hash: &str) -> Option<bool> {
+        self.torrents
+            .read()
+            .get(hash)
+            .map(|t| t.sequential_download)
+    }
+
+    // ========== File Priorities ==========
+
+    /// Set file priority for a specific file in a torrent
+    pub fn set_file_priority(&self, hash: &str, file_index: usize, priority: FilePriority) -> bool {
+        let mut torrents = self.torrents.write();
+        if let Some(torrent) = torrents.get_mut(hash) {
+            if file_index < torrent.file_priorities.len() {
+                torrent.file_priorities[file_index] = priority;
+                tracing::info!(
+                    "File {} priority for {}: {:?}",
+                    file_index,
+                    &hash[..8.min(hash.len())],
+                    priority
+                );
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
+    /// Set priorities for all files in a torrent
+    pub fn set_all_file_priorities(&self, hash: &str, priorities: Vec<u8>) -> bool {
+        let mut torrents = self.torrents.write();
+        if let Some(torrent) = torrents.get_mut(hash) {
+            if priorities.len() == torrent.file_priorities.len() {
+                torrent.file_priorities =
+                    priorities.into_iter().map(FilePriority::from_u8).collect();
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
+    /// Get file priorities for a torrent
+    pub fn get_file_priorities(&self, hash: &str) -> Option<Vec<u8>> {
+        self.torrents
+            .read()
+            .get(hash)
+            .map(|t| t.file_priorities.iter().map(|p| *p as u8).collect())
+    }
+
+    // ========== Categories ==========
+
+    /// Add a category
+    pub fn add_category(&self, name: String, save_path: PathBuf) {
+        let category = settings::Category {
+            name: name.clone(),
+            save_path,
+        };
+        self.categories.write().insert(name, category);
+    }
+
+    /// Remove a category
+    pub fn remove_category(&self, name: &str) -> bool {
+        self.categories.write().remove(name).is_some()
+    }
+
+    /// Get all categories
+    pub fn get_categories(&self) -> Vec<settings::Category> {
+        self.categories.read().values().cloned().collect()
+    }
+
+    /// Set torrent category
+    pub fn set_torrent_category(&self, hash: &str, category: Option<String>) -> bool {
+        let mut torrents = self.torrents.write();
+        if let Some(torrent) = torrents.get_mut(hash) {
+            torrent.category = category;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get torrent category
+    pub fn get_torrent_category(&self, hash: &str) -> Option<Option<String>> {
+        self.torrents.read().get(hash).map(|t| t.category.clone())
+    }
+
+    // ========== Tags ==========
+
+    /// Add a tag to a torrent
+    pub fn add_torrent_tag(&self, hash: &str, tag: String) -> bool {
+        let mut torrents = self.torrents.write();
+        if let Some(torrent) = torrents.get_mut(hash) {
+            torrent.tags.insert(tag);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Remove a tag from a torrent
+    pub fn remove_torrent_tag(&self, hash: &str, tag: &str) -> bool {
+        let mut torrents = self.torrents.write();
+        if let Some(torrent) = torrents.get_mut(hash) {
+            torrent.tags.remove(tag)
+        } else {
+            false
+        }
+    }
+
+    /// Get all tags for a torrent
+    pub fn get_torrent_tags(&self, hash: &str) -> Option<Vec<String>> {
+        self.torrents
+            .read()
+            .get(hash)
+            .map(|t| t.tags.iter().cloned().collect())
+    }
+
+    /// Set all tags for a torrent
+    pub fn set_torrent_tags(&self, hash: &str, tags: Vec<String>) -> bool {
+        let mut torrents = self.torrents.write();
+        if let Some(torrent) = torrents.get_mut(hash) {
+            torrent.tags = tags.into_iter().collect();
+            true
+        } else {
+            false
+        }
+    }
+
+    // ========== Share Limits ==========
+
+    /// Set share limits for a torrent
+    pub fn set_torrent_share_limits(
+        &self,
+        hash: &str,
+        max_ratio: Option<f64>,
+        max_seeding_time: Option<u64>,
+        limit_action: settings::LimitAction,
+    ) -> bool {
+        let mut torrents = self.torrents.write();
+        if let Some(torrent) = torrents.get_mut(hash) {
+            torrent.share_limits = settings::ShareLimits {
+                max_ratio,
+                max_seeding_time,
+                limit_action,
+            };
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Get share limits for a torrent
+    pub fn get_torrent_share_limits(&self, hash: &str) -> Option<settings::ShareLimits> {
+        self.torrents
+            .read()
+            .get(hash)
+            .map(|t| t.share_limits.clone())
+    }
+
+    /// Set default share limits for new torrents
+    pub fn set_default_share_limits(&self, limits: settings::ShareLimits) {
+        *self.default_share_limits.write() = limits;
+    }
+
+    /// Get default share limits
+    pub fn get_default_share_limits(&self) -> settings::ShareLimits {
+        self.default_share_limits.read().clone()
+    }
+
+    /// Get current share ratio for a torrent
+    pub fn get_torrent_ratio(&self, hash: &str) -> Option<f64> {
+        self.torrents.read().get(hash).map(|t| t.share_ratio())
+    }
+
+    /// Get seeding time for a torrent in seconds
+    pub fn get_torrent_seeding_time(&self, hash: &str) -> Option<u64> {
+        self.torrents.read().get(hash).map(|t| t.seeding_time())
+    }
+
+    // ========== Auto-Add Trackers ==========
+
+    /// Set auto-add tracker settings
+    pub fn set_auto_tracker_settings(&self, enabled: bool, trackers: Vec<String>) {
+        let mut settings = self.auto_tracker_settings.write();
+        settings.enabled = enabled;
+        settings.trackers = trackers;
+    }
+
+    /// Get auto-add tracker settings
+    pub fn get_auto_tracker_settings(&self) -> settings::AutoTrackerSettings {
+        self.auto_tracker_settings.read().clone()
+    }
+
+    // ========== Move on Completion ==========
+
+    /// Set move-on-completion settings
+    pub fn set_move_on_complete_settings(
+        &self,
+        enabled: bool,
+        target_path: Option<PathBuf>,
+        use_category_path: bool,
+    ) {
+        let mut settings = self.move_on_complete_settings.write();
+        settings.enabled = enabled;
+        settings.target_path = target_path;
+        settings.use_category_path = use_category_path;
+    }
+
+    /// Get move-on-completion settings
+    pub fn get_move_on_complete_settings(&self) -> settings::MoveOnCompleteSettings {
+        self.move_on_complete_settings.read().clone()
+    }
+
+    /// Set move-on-completion path for a specific torrent
+    pub fn set_torrent_move_on_complete(&self, hash: &str, path: Option<PathBuf>) -> bool {
+        let mut torrents = self.torrents.write();
+        if let Some(torrent) = torrents.get_mut(hash) {
+            torrent.move_on_complete = path;
+            true
+        } else {
+            false
+        }
+    }
+
+    // ========== External Program ==========
+
+    /// Set external program settings
+    pub fn set_external_program_settings(
+        &self,
+        on_completion_enabled: bool,
+        command: Option<String>,
+    ) {
+        let mut settings = self.external_program_settings.write();
+        settings.on_completion_enabled = on_completion_enabled;
+        settings.on_completion_command = command;
+    }
+
+    /// Get external program settings
+    pub fn get_external_program_settings(&self) -> settings::ExternalProgramSettings {
+        self.external_program_settings.read().clone()
+    }
+
+    /// Run external program for a completed torrent
+    pub async fn run_completion_program(&self, hash: &str) -> Result<(), String> {
+        let settings = self.external_program_settings.read().clone();
+        if !settings.on_completion_enabled {
+            return Ok(());
+        }
+
+        let Some(command_template) = settings.on_completion_command else {
+            return Ok(());
+        };
+
+        let (name, save_path) = {
+            let torrents = self.torrents.read();
+            let torrent = torrents.get(hash).ok_or("Torrent not found")?;
+            (torrent.meta.info.name.clone(), torrent.save_path.clone())
+        };
+
+        // Replace placeholders
+        let command = command_template
+            .replace("%N", &name)
+            .replace("%F", &save_path.join(&name).to_string_lossy())
+            .replace("%R", &save_path.to_string_lossy())
+            .replace("%D", &save_path.to_string_lossy())
+            .replace("%I", hash);
+
+        tracing::info!("Running completion program: {}", command);
+
+        // Execute command
+        #[cfg(unix)]
+        let result = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(&command)
+            .spawn();
+
+        #[cfg(windows)]
+        let result = tokio::process::Command::new("cmd")
+            .arg("/C")
+            .arg(&command)
+            .spawn();
+
+        match result {
+            Ok(mut child) => {
+                // Don't wait for completion, just spawn it
+                tokio::spawn(async move {
+                    let _ = child.wait().await;
+                });
+                Ok(())
+            }
+            Err(e) => Err(format!("Failed to run command: {}", e)),
+        }
+    }
+
+    // ========== Watch Folders ==========
+
+    /// Get watch folder manager
+    pub fn watch_manager(&self) -> &Arc<watch::WatchFolderManager> {
+        &self.watch_manager
+    }
+
+    /// Add a watch folder
+    pub async fn add_watch_folder(&self, folder: settings::WatchFolder) {
+        let watch_folder = watch::WatchFolder {
+            id: folder.id,
+            path: folder.path,
+            category: folder.category,
+            tags: folder.tags,
+            process_existing: folder.process_existing,
+            enabled: folder.enabled,
+        };
+        self.watch_manager.add_folder(watch_folder).await;
+    }
+
+    /// Remove a watch folder
+    pub async fn remove_watch_folder(&self, id: &str) -> bool {
+        self.watch_manager.remove_folder(id).await.is_some()
+    }
+
+    /// Get all watch folders
+    pub async fn get_watch_folders(&self) -> Vec<watch::WatchFolder> {
+        self.watch_manager.get_folders().await
+    }
+
+    // ========== RSS ==========
+
+    /// Get RSS manager
+    pub fn rss_manager(&self) -> &Arc<rss::RssManager> {
+        &self.rss_manager
+    }
+
+    /// Add an RSS feed
+    pub async fn add_rss_feed(&self, feed: rss::RssFeed) {
+        self.rss_manager.add_feed(feed).await;
+    }
+
+    /// Remove an RSS feed
+    pub async fn remove_rss_feed(&self, id: &str) -> bool {
+        self.rss_manager.remove_feed(id).await.is_some()
+    }
+
+    /// Get all RSS feeds
+    pub async fn get_rss_feeds(&self) -> Vec<rss::RssFeed> {
+        self.rss_manager.get_feeds().await
+    }
+
+    /// Add an RSS download rule
+    pub async fn add_rss_rule(&self, rule: rss::RssDownloadRule) {
+        self.rss_manager.add_rule(rule).await;
+    }
+
+    /// Remove an RSS download rule
+    pub async fn remove_rss_rule(&self, id: &str) -> bool {
+        self.rss_manager.remove_rule(id).await.is_some()
+    }
+
+    /// Get all RSS download rules
+    pub async fn get_rss_rules(&self) -> Vec<rss::RssDownloadRule> {
+        self.rss_manager.get_rules().await
+    }
+
+    /// Get items for an RSS feed
+    pub async fn get_rss_feed_items(&self, feed_id: &str) -> Vec<rss::RssItem> {
+        self.rss_manager.get_feed_items(feed_id).await
+    }
+
+    /// Refresh a specific RSS feed
+    pub async fn refresh_rss_feed(&self, feed_id: &str) -> Result<(), String> {
+        self.rss_manager.refresh_feed(feed_id).await
+    }
+
+    // ========== Search Engine ==========
+
+    /// Get search engine
+    pub fn search_engine(&self) -> &Arc<search::SearchEngine> {
+        &self.search_engine
+    }
+
+    /// Load search plugins
+    pub async fn load_search_plugins(&self) -> Result<usize, String> {
+        self.search_engine.load_plugins().await
+    }
+
+    /// Get all search plugins
+    pub async fn get_search_plugins(&self) -> Vec<search::SearchPlugin> {
+        self.search_engine.get_plugins().await
+    }
+
+    /// Install a search plugin from URL
+    pub async fn install_search_plugin(&self, url: &str) -> Result<search::SearchPlugin, String> {
+        self.search_engine.install_plugin(url).await
+    }
+
+    /// Remove a search plugin
+    pub async fn remove_search_plugin(&self, name: &str) -> Result<(), String> {
+        self.search_engine.remove_plugin(name).await
+    }
+
+    /// Enable or disable a search plugin
+    pub async fn set_search_plugin_enabled(&self, name: &str, enabled: bool) -> bool {
+        self.search_engine.set_plugin_enabled(name, enabled).await
+    }
+
+    /// Start a search
+    pub async fn start_search(
+        &self,
+        query: &str,
+        plugins: Vec<String>,
+        category: Option<String>,
+    ) -> String {
+        self.search_engine
+            .start_search(query, plugins, category)
+            .await
+    }
+
+    /// Stop a search
+    pub async fn stop_search(&self, search_id: &str) -> bool {
+        self.search_engine.stop_search(search_id).await
+    }
+
+    /// Get search status
+    pub async fn get_search(&self, search_id: &str) -> Option<search::SearchJob> {
+        self.search_engine.get_search(search_id).await
+    }
+
+    /// Get search results
+    pub async fn get_search_results(&self, search_id: &str) -> Vec<search::SearchResult> {
+        self.search_engine.get_search_results(search_id).await
+    }
+
+    /// Delete a search
+    pub async fn delete_search(&self, search_id: &str) -> bool {
+        self.search_engine.delete_search(search_id).await
+    }
+
+    /// Get all active searches
+    pub async fn get_searches(&self) -> Vec<search::SearchJob> {
+        self.search_engine.get_searches().await
+    }
+
+    // ========== Trackers ==========
+
+    /// Add trackers to a torrent
+    pub fn add_torrent_trackers(&self, hash: &str, trackers: Vec<String>) -> bool {
+        let mut torrents = self.torrents.write();
+        if let Some(torrent) = torrents.get_mut(hash) {
+            for url in trackers {
+                if !torrent.trackers.contains(&url) {
+                    torrent.trackers.push(url.clone());
+                    torrent
+                        .tracker_info
+                        .push(tracker_info::TrackerInfo::new(url));
+                }
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Remove a tracker from a torrent
+    pub fn remove_torrent_tracker(&self, hash: &str, tracker_url: &str) -> bool {
+        let mut torrents = self.torrents.write();
+        if let Some(torrent) = torrents.get_mut(hash) {
+            if let Some(pos) = torrent.trackers.iter().position(|u| u == tracker_url) {
+                torrent.trackers.remove(pos);
+                if pos < torrent.tracker_info.len() {
+                    torrent.tracker_info.remove(pos);
+                }
+                true
+            } else {
+                false
+            }
+        } else {
+            false
         }
     }
 }

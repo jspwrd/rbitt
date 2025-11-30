@@ -1,4 +1,3 @@
-
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

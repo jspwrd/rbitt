@@ -199,7 +199,6 @@ impl DownloadablePieces {
             });
         }
     }
-
 }
 
 pub struct PieceManager {
@@ -402,10 +401,27 @@ impl PieceManager {
     }
 
     pub fn pick_piece_sequential(&self, peer_bitfield: &Bitfield) -> Option<u32> {
+        self.pick_piece_sequential_with_priorities(peer_bitfield, None)
+    }
+
+    /// Pick a piece sequentially, optionally respecting file priorities.
+    /// `piece_priorities` is an optional slice where 0 means "skip this piece".
+    pub fn pick_piece_sequential_with_priorities(
+        &self,
+        peer_bitfield: &Bitfield,
+        piece_priorities: Option<&[u8]>,
+    ) -> Option<u32> {
         let our_bf = self.our_bitfield.read();
         let active = self.active_pieces.read();
 
         for i in 0..self.piece_count {
+            // Skip pieces with priority 0 (Skip)
+            if let Some(priorities) = piece_priorities {
+                if i < priorities.len() && priorities[i] == 0 {
+                    continue;
+                }
+            }
+
             if !our_bf.has_piece(i)
                 && peer_bitfield.has_piece(i)
                 && !active.contains_key(&(i as u32))
@@ -414,7 +430,14 @@ impl PieceManager {
             }
         }
 
+        // Try in-progress pieces
         for i in 0..self.piece_count {
+            if let Some(priorities) = piece_priorities {
+                if i < priorities.len() && priorities[i] == 0 {
+                    continue;
+                }
+            }
+
             if !our_bf.has_piece(i) && peer_bitfield.has_piece(i) {
                 if let Some(state) = active.get(&(i as u32)) {
                     let piece_len = self.piece_size(i as u32) as u32;
@@ -422,6 +445,89 @@ impl PieceManager {
                     let received_or_pending = state.blocks.len() + state.pending_blocks.len();
                     if (received_or_pending as u32) < block_count {
                         return Some(i as u32);
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Pick a piece using rarest-first, optionally respecting file priorities.
+    /// `piece_priorities` is an optional slice where 0 means "skip this piece".
+    pub fn pick_piece_with_priorities(
+        &self,
+        peer_bitfield: &Bitfield,
+        piece_priorities: Option<&[u8]>,
+    ) -> Option<u32> {
+        let have_count = self.have_count();
+        let active = self.active_pieces.read();
+        let downloadable = self.downloadable.read();
+
+        // Cold start: use random selection from first N available pieces
+        const COLD_START_THRESHOLD: usize = 4;
+        const RANDOM_POOL_SIZE: usize = 10;
+
+        if have_count < COLD_START_THRESHOLD {
+            let mut candidates: Vec<u32> = downloadable
+                .candidates
+                .iter()
+                .filter(|pwa| {
+                    // Skip pieces with priority 0
+                    if let Some(priorities) = piece_priorities {
+                        if (pwa.piece_index as usize) < priorities.len()
+                            && priorities[pwa.piece_index as usize] == 0
+                        {
+                            return false;
+                        }
+                    }
+                    peer_bitfield.has_piece(pwa.piece_index as usize)
+                        && !active.contains_key(&pwa.piece_index)
+                })
+                .take(RANDOM_POOL_SIZE)
+                .map(|pwa| pwa.piece_index)
+                .collect();
+
+            if !candidates.is_empty() {
+                let mut rng = rand::thread_rng();
+                candidates.shuffle(&mut rng);
+                return candidates.first().copied();
+            }
+        }
+
+        // Normal mode: rarest-first selection
+        for pwa in &downloadable.candidates {
+            let idx = pwa.piece_index;
+
+            // Skip pieces with priority 0
+            if let Some(priorities) = piece_priorities {
+                if (idx as usize) < priorities.len() && priorities[idx as usize] == 0 {
+                    continue;
+                }
+            }
+
+            if peer_bitfield.has_piece(idx as usize) && !active.contains_key(&idx) {
+                return Some(idx);
+            }
+        }
+
+        // Try to help with pieces already in progress
+        for pwa in &downloadable.candidates {
+            let idx = pwa.piece_index;
+
+            if let Some(priorities) = piece_priorities {
+                if (idx as usize) < priorities.len() && priorities[idx as usize] == 0 {
+                    continue;
+                }
+            }
+
+            if peer_bitfield.has_piece(idx as usize) {
+                if let Some(state) = active.get(&idx) {
+                    let piece_len = self.piece_size(idx) as u32;
+                    let block_count = piece_len.div_ceil(BLOCK_SIZE);
+                    let received_or_pending = state.blocks.len() + state.pending_blocks.len();
+                    if (received_or_pending as u32) < block_count {
+                        return Some(idx);
                     }
                 }
             }
@@ -442,7 +548,9 @@ impl PieceManager {
             let length = std::cmp::min(BLOCK_SIZE, piece_len as u32 - offset);
 
             let should_request = match state {
-                Some(s) => !s.blocks.contains_key(&offset) && !s.pending_blocks.contains_key(&offset),
+                Some(s) => {
+                    !s.blocks.contains_key(&offset) && !s.pending_blocks.contains_key(&offset)
+                }
                 None => true,
             };
 

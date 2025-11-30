@@ -1,5 +1,9 @@
-use oxidebt_constants::{CONNECTION_TIMEOUT, METADATA_FETCH_TIMEOUT, METADATA_PIECE_SIZE, METADATA_READ_TIMEOUT};
-use oxidebt_peer::{ExtensionHandshake, ExtensionMessage, Handshake, Message, MetadataMessage, PeerId};
+use oxidebt_constants::{
+    CONNECTION_TIMEOUT, METADATA_FETCH_TIMEOUT, METADATA_PIECE_SIZE, METADATA_READ_TIMEOUT,
+};
+use oxidebt_peer::{
+    ExtensionHandshake, ExtensionMessage, Handshake, Message, MetadataMessage, PeerId,
+};
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

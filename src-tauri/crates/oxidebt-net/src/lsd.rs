@@ -1,4 +1,3 @@
-
 use crate::error::NetError;
 use oxidebt_constants::{
     LSD_ANNOUNCE_INTERVAL, LSD_CHANNEL_CAPACITY, LSD_COOKIE_SIZE, LSD_MULTICAST_V4,
@@ -161,9 +160,7 @@ impl LsdService {
                 let (n, source) = v6.recv_from(&mut buf_v6).await?;
                 self.parse_announce(&buf_v6[..n], source)
             }
-            (None, None) => {
-                Err(NetError::Lsd("no socket available".into()))
-            }
+            (None, None) => Err(NetError::Lsd("no socket available".into())),
         }
     }
 

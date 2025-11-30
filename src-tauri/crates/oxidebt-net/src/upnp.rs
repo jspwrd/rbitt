@@ -1,4 +1,3 @@
-
 use crate::error::NetError;
 use oxidebt_constants::{
     NATPMP_PORT, SSDP_MULTICAST, SSDP_PORT, UPNP_DISCOVERY_TIMEOUT, UPNP_REQUEST_TIMEOUT,
@@ -83,7 +82,8 @@ impl PortMapper {
              MX: 3\r\n\
              ST: urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\n\
              \r\n",
-            ssdp_multicast(), SSDP_PORT
+            ssdp_multicast(),
+            SSDP_PORT
         );
 
         let dest = SocketAddrV4::new(ssdp_multicast(), SSDP_PORT);
@@ -195,7 +195,9 @@ impl PortMapper {
         control_url: &str,
         mapping: &PortMapping,
     ) -> Result<u16, NetError> {
-        let local_ip = self.get_local_ip().unwrap_or_else(|| Ipv4Addr::new(0, 0, 0, 0));
+        let local_ip = self
+            .get_local_ip()
+            .unwrap_or_else(|| Ipv4Addr::new(0, 0, 0, 0));
 
         let body = format!(
             r#"<?xml version="1.0"?>

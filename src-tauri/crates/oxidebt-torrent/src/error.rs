@@ -1,4 +1,3 @@
-
 use oxidebt_bencode::DecodeError;
 use thiserror::Error;
 

@@ -137,10 +137,8 @@ impl IoQueue {
 
 #[allow(dead_code)]
 pub fn sort_writes_by_offset(ops: &mut [WriteOp]) {
-    ops.sort_by(|a, b| {
-        match a.file_index.cmp(&b.file_index) {
-            CmpOrdering::Equal => a.file_offset.cmp(&b.file_offset),
-            other => other,
-        }
+    ops.sort_by(|a, b| match a.file_index.cmp(&b.file_index) {
+        CmpOrdering::Equal => a.file_offset.cmp(&b.file_offset),
+        other => other,
     });
 }

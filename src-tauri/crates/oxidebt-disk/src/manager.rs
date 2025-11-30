@@ -1,4 +1,3 @@
-
 use crate::error::DiskError;
 use crate::storage::{AllocationMode, FileEntry, PieceFileSpan, PieceInfo};
 use bytes::Bytes;
@@ -432,7 +431,7 @@ impl TorrentStorage {
 
     /// Verify all pieces with improved batching
     pub async fn verify_all(&self) -> Result<Vec<bool>, DiskError> {
-        use tokio::time::{timeout, Duration};
+        use tokio::time::{Duration, timeout};
 
         let piece_count = self.pieces.len();
         if piece_count == 0 {

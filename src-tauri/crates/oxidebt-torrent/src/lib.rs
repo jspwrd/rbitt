@@ -1,4 +1,3 @@
-
 mod error;
 mod info_hash;
 mod magnet;

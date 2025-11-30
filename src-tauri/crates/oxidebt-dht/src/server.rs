@@ -1,4 +1,3 @@
-
 use crate::error::DhtError;
 use crate::message::{DhtMessage, DhtResponse};
 use crate::node::{Node, NodeId};
@@ -7,12 +6,12 @@ use bytes::Bytes;
 use oxidebt_constants::{
     DHT_ALPHA, DHT_BOOTSTRAP_NODES, DHT_MAX_ITERATIONS, DHT_QUERY_TIMEOUT, MAX_PENDING_DHT_QUERIES,
 };
-use std::time::{Duration, Instant};
 use parking_lot::RwLock;
 use rand::Rng;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
@@ -182,7 +181,12 @@ impl DhtServer {
             queries.push((node.id, self.send_query(node.addr, msg, tid)));
         }
 
-        let results = futures::future::join_all(queries.into_iter().map(|(id, fut)| async move { (id, fut.await) })).await;
+        let results = futures::future::join_all(
+            queries
+                .into_iter()
+                .map(|(id, fut)| async move { (id, fut.await) }),
+        )
+        .await;
 
         for (node_id, result) in results {
             match result {
@@ -295,7 +299,11 @@ impl DhtServer {
             }
         }
 
-        info!("DHT get_peers found {} peers after querying {} nodes", peers.len(), queried.len());
+        info!(
+            "DHT get_peers found {} peers after querying {} nodes",
+            peers.len(),
+            queried.len()
+        );
         Ok(peers)
     }
 
@@ -607,7 +615,15 @@ impl DhtServer {
                     }),
                 }
             }
-            ("announce_peer", crate::message::DhtQuery::AnnouncePeer { info_hash, port, implied_port, token }) => {
+            (
+                "announce_peer",
+                crate::message::DhtQuery::AnnouncePeer {
+                    info_hash,
+                    port,
+                    implied_port,
+                    token,
+                },
+            ) => {
                 if !self.validate_token(&addr, &token) {
                     debug!("Rejecting announce_peer from {} - invalid token", addr);
                     DhtMessage {
@@ -623,7 +639,11 @@ impl DhtServer {
                     let peer_port = if implied_port { addr.port() } else { port };
                     let peer_addr = SocketAddr::new(addr.ip(), peer_port);
                     self.peer_store.write().add_peer(info_hash, peer_addr);
-                    debug!("Stored announced peer {} for info_hash {:?}", peer_addr, &info_hash[..8]);
+                    debug!(
+                        "Stored announced peer {} for info_hash {:?}",
+                        peer_addr,
+                        &info_hash[..8]
+                    );
 
                     DhtMessage {
                         transaction_id: tid,

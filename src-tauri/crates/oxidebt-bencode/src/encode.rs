@@ -1,4 +1,3 @@
-
 use crate::error::EncodeError;
 use crate::value::Value;
 use bytes::{BufMut, BytesMut};

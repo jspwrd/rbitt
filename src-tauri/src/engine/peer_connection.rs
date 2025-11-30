@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use oxidebt_constants::{
-    KEEPALIVE_INTERVAL, MAX_PARALLEL_PIECES, MAX_REQUEST_LENGTH, MAX_REQUESTS_PER_PEER,
+    KEEPALIVE_INTERVAL, MAX_PARALLEL_PIECES, MAX_REQUESTS_PER_PEER, MAX_REQUEST_LENGTH,
     PEX_INITIAL_DELAY, PEX_MAX_IPV4_PEERS, PEX_SEND_INTERVAL,
 };
 use oxidebt_disk::DiskManager;
@@ -335,15 +335,37 @@ async fn handle_message(
         }
         Message::Piece { index, begin, data } => {
             handle_piece_message(
-                hash, peer_addr, conn, torrents, disk_manager, bandwidth_limiter, event_tx,
-                pending_requests, index, begin, data,
+                hash,
+                peer_addr,
+                conn,
+                torrents,
+                disk_manager,
+                bandwidth_limiter,
+                event_tx,
+                pending_requests,
+                index,
+                begin,
+                data,
             )
             .await?;
         }
-        Message::Request { index, begin, length } => {
+        Message::Request {
+            index,
+            begin,
+            length,
+        } => {
             handle_request_message(
-                hash, peer_addr, conn, torrents, disk_manager, bandwidth_limiter, event_tx,
-                index, begin, length, no_seed_mode,
+                hash,
+                peer_addr,
+                conn,
+                torrents,
+                disk_manager,
+                bandwidth_limiter,
+                event_tx,
+                index,
+                begin,
+                length,
+                no_seed_mode,
             )
             .await?;
         }
@@ -369,14 +391,28 @@ async fn handle_message(
         }
         Message::Bitfield(bits) => {
             handle_bitfield_message(
-                hash, peer_addr, conn, torrents, event_tx, pending_requests, bits,
+                hash,
+                peer_addr,
+                conn,
+                torrents,
+                event_tx,
+                pending_requests,
+                bits,
             )
             .await?;
         }
         Message::Extended(ext_msg) => {
             handle_extended_message(
-                hash, peer_addr, conn, torrents, event_tx, pex_sent_peers, sent_initial_pex,
-                last_pex_time, listen_port, ext_msg,
+                hash,
+                peer_addr,
+                conn,
+                torrents,
+                event_tx,
+                pex_sent_peers,
+                sent_initial_pex,
+                last_pex_time,
+                listen_port,
+                ext_msg,
             )
             .await?;
         }
@@ -395,7 +431,11 @@ async fn handle_message(
         Message::HaveNone => {
             handle_have_none(hash, peer_addr, torrents, event_tx).await?;
         }
-        Message::RejectRequest { index, begin, length } => {
+        Message::RejectRequest {
+            index,
+            begin,
+            length,
+        } => {
             tracing::debug!(
                 "Peer {} rejected request for piece {} offset {} len {}",
                 peer_addr,
@@ -416,11 +456,7 @@ async fn handle_message(
                     let torrents = torrents.read();
                     torrents
                         .get(hash)
-                        .map(|t| {
-                            !t.piece_manager
-                                .bitfield()
-                                .has_piece(piece_index as usize)
-                        })
+                        .map(|t| !t.piece_manager.bitfield().has_piece(piece_index as usize))
                         .unwrap_or(false)
                 };
                 if need_piece {
@@ -455,7 +491,9 @@ async fn handle_piece_message(
     if !wait.is_zero() {
         tracing::debug!(
             "[BLOCK] {} rate limited for {:?} ({} bytes)",
-            peer_addr, wait, block_size
+            peer_addr,
+            wait,
+            block_size
         );
         tokio::time::sleep(wait).await;
     }
@@ -465,9 +503,7 @@ async fn handle_piece_message(
         size: data.len() as u64,
     });
 
-    disk_manager
-        .write_block(hash, index, begin, &data)
-        .await?;
+    disk_manager.write_block(hash, index, begin, &data).await?;
 
     let piece_complete = {
         let torrents = torrents.read();
@@ -517,7 +553,10 @@ async fn handle_piece_message(
                 let elapsed = recv_start.elapsed();
                 tracing::info!(
                     "[PIECE] #{} complete ({} bytes in {:?}) from {}",
-                    index, block_size, elapsed, peer_addr
+                    index,
+                    block_size,
+                    elapsed,
+                    peer_addr
                 );
             } else {
                 tracing::warn!("Piece {} failed verification, will re-download", index);
@@ -560,7 +599,12 @@ async fn handle_request_message(
             MAX_REQUEST_LENGTH
         );
         if conn.supports_fast() {
-            conn.send(Message::RejectRequest { index, begin, length }).await?;
+            conn.send(Message::RejectRequest {
+                index,
+                begin,
+                length,
+            })
+            .await?;
         }
         return Ok(());
     }
@@ -573,7 +617,12 @@ async fn handle_request_message(
             index
         );
         if conn.supports_fast() {
-            conn.send(Message::RejectRequest { index, begin, length }).await?;
+            conn.send(Message::RejectRequest {
+                index,
+                begin,
+                length,
+            })
+            .await?;
         }
         return Ok(());
     }
@@ -611,7 +660,11 @@ async fn handle_request_message(
             index,
             begin,
             length,
-            if is_allowed_fast && !is_unchoked { " (AllowedFast)" } else { "" }
+            if is_allowed_fast && !is_unchoked {
+                " (AllowedFast)"
+            } else {
+                ""
+            }
         );
 
         let _ = event_tx.send(PeerEvent::BlockSent {
@@ -629,7 +682,12 @@ async fn handle_request_message(
                 is_unchoked,
                 is_allowed_fast
             );
-            conn.send(Message::RejectRequest { index, begin, length }).await?;
+            conn.send(Message::RejectRequest {
+                index,
+                begin,
+                length,
+            })
+            .await?;
         } else {
             // Per BEP 3: silently ignore requests from choked peers
             tracing::debug!(
@@ -641,7 +699,12 @@ async fn handle_request_message(
     } else {
         // We don't have the piece - send RejectRequest if Fast Extension supported
         if conn.supports_fast() {
-            conn.send(Message::RejectRequest { index, begin, length }).await?;
+            conn.send(Message::RejectRequest {
+                index,
+                begin,
+                length,
+            })
+            .await?;
         }
         tracing::debug!(
             "Rejecting request from {}: we don't have piece {}",
@@ -665,7 +728,10 @@ async fn handle_bitfield_message(
 ) -> Result<(), EngineError> {
     let piece_count = {
         let torrents = torrents.read();
-        torrents.get(hash).map(|t| t.meta.piece_count()).unwrap_or(0)
+        torrents
+            .get(hash)
+            .map(|t| t.meta.piece_count())
+            .unwrap_or(0)
     };
 
     match Bitfield::from_bytes(&bits, piece_count) {
@@ -735,7 +801,13 @@ async fn handle_extended_message(
                 if !*sent_initial_pex {
                     if let Some(pex_id) = ext_hs.ut_pex {
                         send_initial_pex(
-                            hash, peer_addr, conn, torrents, pex_sent_peers, listen_port, pex_id,
+                            hash,
+                            peer_addr,
+                            conn,
+                            torrents,
+                            pex_sent_peers,
+                            listen_port,
+                            pex_id,
                         )
                         .await?;
                         *last_pex_time = Instant::now();
@@ -767,7 +839,11 @@ async fn handle_extended_message(
                 });
             }
         }
-        ExtensionMessage::Metadata { msg_type, piece, data: _ } => {
+        ExtensionMessage::Metadata {
+            msg_type,
+            piece,
+            data: _,
+        } => {
             // BEP-9: ut_metadata handling
             // msg_type 0 = request, 1 = data, 2 = reject
             if msg_type == 0 {
@@ -805,7 +881,10 @@ async fn handle_metadata_request(
     };
 
     let Some(peer_ut_metadata_id) = peer_metadata_id else {
-        tracing::debug!("Peer {} requested metadata but hasn't advertised ut_metadata support", peer_addr);
+        tracing::debug!(
+            "Peer {} requested metadata but hasn't advertised ut_metadata support",
+            peer_addr
+        );
         return Ok(());
     };
 
@@ -923,7 +1002,10 @@ async fn handle_have_none(
 ) -> Result<(), EngineError> {
     let piece_count = {
         let torrents = torrents.read();
-        torrents.get(hash).map(|t| t.meta.piece_count()).unwrap_or(0)
+        torrents
+            .get(hash)
+            .map(|t| t.meta.piece_count())
+            .unwrap_or(0)
     };
     let bf = Bitfield::new(piece_count);
     let _ = event_tx.send(PeerEvent::PeerBitfield {
@@ -961,8 +1043,16 @@ async fn handle_periodic_tasks(
 
     if last_pex_time.elapsed() >= PEX_SEND_INTERVAL {
         if let Some(pex_id) = conn.peer_pex_id() {
-            send_pex_update(hash, peer_addr, conn, torrents, pex_sent_peers, listen_port, pex_id)
-                .await?;
+            send_pex_update(
+                hash,
+                peer_addr,
+                conn,
+                torrents,
+                pex_sent_peers,
+                listen_port,
+                pex_id,
+            )
+            .await?;
             *last_pex_time = Instant::now();
         }
     }
@@ -999,8 +1089,8 @@ async fn handle_cancel(
 }
 
 /// BEP-11 peer flags
-const PEX_FLAG_SEED: u8 = 0x02;       // Upload only (seed)
-const PEX_FLAG_REACHABLE: u8 = 0x10;  // Connectable/reachable
+const PEX_FLAG_SEED: u8 = 0x02; // Upload only (seed)
+const PEX_FLAG_REACHABLE: u8 = 0x10; // Connectable/reachable
 
 /// Get PEX flags for a peer based on their bitfield
 fn get_pex_flags(bitfield: Option<&Bitfield>) -> u8 {
@@ -1116,7 +1206,12 @@ async fn send_pex_update(
         .filter(|&&p| {
             p != peer_addr && is_shareable_pex_addr(&p, listen_port) && !pex_sent_peers.contains(&p)
         })
-        .map(|&addr| (addr, peer_flags.get(&addr).copied().unwrap_or(PEX_FLAG_REACHABLE)))
+        .map(|&addr| {
+            (
+                addr,
+                peer_flags.get(&addr).copied().unwrap_or(PEX_FLAG_REACHABLE),
+            )
+        })
         .take(PEX_MAX_IPV4_PEERS)
         .collect();
 
@@ -1193,7 +1288,6 @@ async fn send_pex_update(
     Ok(())
 }
 
-
 /// Requests pieces from a peer using batched sends for better performance.
 ///
 /// This function collects all block requests first, then sends them in a single
@@ -1205,7 +1299,6 @@ pub async fn request_pieces(
     torrents: &Arc<RwLock<HashMap<String, ManagedTorrent>>>,
     pending_requests: &mut HashMap<u32, Vec<(u32, u32)>>,
 ) -> Result<(), EngineError> {
-
     // Check if peer is choking us (don't spam logs for this common case)
     if conn.peer_choking() {
         return Ok(());
@@ -1243,12 +1336,31 @@ pub async fn request_pieces(
                 break;
             }
 
-            if let Some(piece_idx) = torrent.piece_manager.pick_piece(&peer_bf) {
+            // Compute piece priorities if any files are set to skip
+            let piece_priorities = if torrent.has_skipped_files() {
+                Some(torrent.compute_piece_priorities())
+            } else {
+                None
+            };
+
+            // Use sequential piece picking if enabled, otherwise use rarest-first
+            let piece_idx = if torrent.sequential_download {
+                torrent
+                    .piece_manager
+                    .pick_piece_sequential_with_priorities(&peer_bf, piece_priorities.as_deref())
+            } else {
+                torrent
+                    .piece_manager
+                    .pick_piece_with_priorities(&peer_bf, piece_priorities.as_deref())
+            };
+
+            if let Some(piece_idx) = piece_idx {
                 torrent.piece_manager.start_piece(piece_idx);
 
                 let block_requests = torrent.piece_manager.get_block_requests(piece_idx);
 
-                let blocks_to_take = (requests_budget - all_requests.len()).min(block_requests.len());
+                let blocks_to_take =
+                    (requests_budget - all_requests.len()).min(block_requests.len());
                 if blocks_to_take > 0 {
                     pieces_started += 1;
                     for req in block_requests.into_iter().take(blocks_to_take) {
@@ -1275,7 +1387,9 @@ pub async fn request_pieces(
             let our_bf = torrent.piece_manager.bitfield();
             let peer_has_count = (0..piece_count).filter(|&i| peer_bf.has_piece(i)).count();
             let we_need_count = (0..piece_count).filter(|&i| !our_bf.has_piece(i)).count();
-            let overlap = (0..piece_count).filter(|&i| peer_bf.has_piece(i) && !our_bf.has_piece(i)).count();
+            let overlap = (0..piece_count)
+                .filter(|&i| peer_bf.has_piece(i) && !our_bf.has_piece(i))
+                .count();
             tracing::debug!(
                 "[REQ] {} -> 0 blocks: peer_has={}/{}, we_need={}, overlap={}, active={}",
                 peer_addr,

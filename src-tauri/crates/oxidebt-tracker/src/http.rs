@@ -1,4 +1,3 @@
-
 use crate::error::TrackerError;
 use crate::response::{AnnounceResponse, Peer, ScrapeResponse, ScrapeStats};
 use crate::AnnounceParams;
@@ -30,7 +29,10 @@ impl HttpTracker {
         let parsed_url = Url::parse(params.url)?;
 
         let mut query_parts = vec![
-            format!("info_hash={}", url_encode_bytes(params.info_hash.as_bytes())),
+            format!(
+                "info_hash={}",
+                url_encode_bytes(params.info_hash.as_bytes())
+            ),
             format!("peer_id={}", url_encode_bytes(params.peer_id)),
             format!("port={}", params.port),
             format!("uploaded={}", params.uploaded),

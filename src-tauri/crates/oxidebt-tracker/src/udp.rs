@@ -1,4 +1,3 @@
-
 use crate::error::TrackerError;
 use crate::response::{AnnounceResponse, Peer, ScrapeResponse, ScrapeStats};
 use crate::AnnounceParams;

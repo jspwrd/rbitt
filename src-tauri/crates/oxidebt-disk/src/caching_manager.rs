@@ -175,5 +175,4 @@ impl CachingDiskManager {
         self.block_cache.clear();
         self.piece_cache.clear();
     }
-
 }

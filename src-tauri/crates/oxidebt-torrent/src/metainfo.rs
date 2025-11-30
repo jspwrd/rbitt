@@ -1,4 +1,3 @@
-
 use crate::error::TorrentError;
 use crate::info_hash::{InfoHash, InfoHashV1, InfoHashV2};
 use bytes::Bytes;

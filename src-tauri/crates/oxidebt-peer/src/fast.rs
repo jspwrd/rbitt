@@ -1,4 +1,3 @@
-
 pub use oxidebt_constants::DEFAULT_ALLOWED_FAST_COUNT;
 use sha1::{Digest, Sha1};
 use std::collections::HashSet;
@@ -82,12 +81,7 @@ impl FastExtensionState {
         }
     }
 
-    pub fn init_for_peer(
-        &mut self,
-        peer_ip: IpAddr,
-        info_hash: &[u8; 20],
-        piece_count: usize,
-    ) {
+    pub fn init_for_peer(&mut self, peer_ip: IpAddr, info_hash: &[u8; 20], piece_count: usize) {
         self.peer_supports_fast = true;
         self.allowed_fast_set_outgoing =
             generate_allowed_fast_set(peer_ip, info_hash, piece_count, DEFAULT_ALLOWED_FAST_COUNT);

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crate::TorrentStatus;
 use oxidebt_constants::CONNECTION_SPEED;
 use oxidebt_peer::PieceManager;
@@ -8,6 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use super::peer_info::{FailedPeer, PeerInfo};
+use super::settings::{FilePriority, ShareLimits};
 use super::stats::TorrentStats;
 use super::tracker_info::TrackerInfo;
 
@@ -109,10 +112,30 @@ pub struct ManagedTorrent {
     pub connection_limiter: ConnectionRateLimiter,
     /// Timestamp when the torrent was added, used for queue ordering (FIFO)
     pub added_at: Instant,
+    /// Whether to download pieces in sequential order (for streaming)
+    pub sequential_download: bool,
+    /// Per-file download priorities
+    pub file_priorities: Vec<FilePriority>,
+    /// Assigned category (affects save path)
+    pub category: Option<String>,
+    /// Tags for organization
+    pub tags: HashSet<String>,
+    /// Share ratio and time limits
+    pub share_limits: ShareLimits,
+    /// Time when seeding started (for seeding time limit)
+    pub seeding_started_at: Option<Instant>,
+    /// Save path for this torrent (may differ from default if category-based)
+    pub save_path: std::path::PathBuf,
+    /// Whether to move files on completion
+    pub move_on_complete: Option<std::path::PathBuf>,
 }
 
 impl ManagedTorrent {
     pub fn new(meta: Metainfo) -> Self {
+        Self::with_save_path(meta, std::path::PathBuf::new())
+    }
+
+    pub fn with_save_path(meta: Metainfo, save_path: std::path::PathBuf) -> Self {
         let piece_manager = PieceManager::new(
             meta.piece_count(),
             meta.info.piece_length,
@@ -127,6 +150,9 @@ impl ManagedTorrent {
 
         let (cancel_tx, _) = tokio::sync::broadcast::channel::<u32>(64);
         let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
+
+        // Initialize file priorities to Normal for all files
+        let file_priorities = vec![FilePriority::Normal; meta.info.files.len()];
 
         Self {
             meta,
@@ -147,7 +173,112 @@ impl ManagedTorrent {
             shutdown_tx,
             connection_limiter: ConnectionRateLimiter::new(CONNECTION_SPEED),
             added_at: Instant::now(),
+            sequential_download: false,
+            file_priorities,
+            category: None,
+            tags: HashSet::new(),
+            share_limits: ShareLimits::default(),
+            seeding_started_at: None,
+            save_path,
+            move_on_complete: None,
         }
+    }
+
+    /// Check if share limits have been reached
+    pub fn share_limits_reached(&self) -> bool {
+        // Check ratio limit
+        if let Some(max_ratio) = self.share_limits.max_ratio {
+            let downloaded = self.stats.downloaded.max(1); // Avoid division by zero
+            let ratio = self.stats.uploaded as f64 / downloaded as f64;
+            if ratio >= max_ratio {
+                return true;
+            }
+        }
+
+        // Check seeding time limit
+        if let Some(max_time) = self.share_limits.max_seeding_time {
+            if let Some(started) = self.seeding_started_at {
+                if started.elapsed().as_secs() >= max_time {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Get current share ratio
+    pub fn share_ratio(&self) -> f64 {
+        let downloaded = self.stats.downloaded.max(1);
+        self.stats.uploaded as f64 / downloaded as f64
+    }
+
+    /// Get seeding time in seconds
+    pub fn seeding_time(&self) -> u64 {
+        self.seeding_started_at
+            .map(|s| s.elapsed().as_secs())
+            .unwrap_or(0)
+    }
+
+    /// Compute piece priorities from file priorities.
+    /// A piece is skipped (priority 0) only if ALL files that touch it are skipped.
+    /// Otherwise, the piece gets the maximum priority of all files that touch it.
+    pub fn compute_piece_priorities(&self) -> Vec<u8> {
+        let piece_count = self.meta.piece_count();
+        let piece_length = self.meta.info.piece_length;
+
+        // If no file priorities set, all pieces are normal priority
+        if self.file_priorities.is_empty() {
+            return vec![4u8; piece_count]; // 4 = Normal
+        }
+
+        let mut piece_priorities = vec![0u8; piece_count];
+        let mut piece_touched = vec![false; piece_count];
+
+        let mut file_offset = 0u64;
+        for (file_idx, file) in self.meta.info.files.iter().enumerate() {
+            let file_priority = self
+                .file_priorities
+                .get(file_idx)
+                .copied()
+                .unwrap_or(FilePriority::Normal) as u8;
+
+            // Calculate which pieces this file spans
+            let file_start_piece = (file_offset / piece_length) as usize;
+            let file_end_offset = file_offset + file.length;
+            let file_end_piece = if file_end_offset == 0 {
+                0
+            } else {
+                ((file_end_offset - 1) / piece_length) as usize
+            };
+
+            // Update priorities for pieces this file touches
+            for piece_idx in file_start_piece..=file_end_piece.min(piece_count - 1) {
+                piece_touched[piece_idx] = true;
+                // Take the maximum priority (higher number = higher priority)
+                if file_priority > piece_priorities[piece_idx] {
+                    piece_priorities[piece_idx] = file_priority;
+                }
+            }
+
+            file_offset = file_end_offset;
+        }
+
+        // Any piece not touched by any file gets normal priority
+        for (idx, touched) in piece_touched.iter().enumerate() {
+            if !touched {
+                piece_priorities[idx] = 4; // Normal
+            }
+        }
+
+        piece_priorities
+    }
+
+    /// Check if any files are set to skip
+    pub fn has_skipped_files(&self) -> bool {
+        self.file_priorities
+            .iter()
+            .any(|p| *p == FilePriority::Skip)
     }
 
     pub fn info_hash_hex(&self) -> String {
@@ -217,7 +348,12 @@ impl ManagedTorrent {
     /// Compute qBittorrent-compatible display state based on internal state and transfer rates.
     /// States follow qBittorrent's model: downloading, uploading, stalledDL, stalledUP,
     /// pausedDL, pausedUP, queuedDL, queuedUP, checkingDL, checkingUP, metaDL, moving, error
-    fn compute_display_state(&self, download_rate: f64, upload_rate: f64, is_complete: bool) -> String {
+    fn compute_display_state(
+        &self,
+        download_rate: f64,
+        upload_rate: f64,
+        is_complete: bool,
+    ) -> String {
         match self.state {
             TorrentState::MetadataDownloading => "metaDL".to_string(),
             TorrentState::Checking => {
@@ -282,5 +418,4 @@ impl ManagedTorrent {
             }
         }
     }
-
 }

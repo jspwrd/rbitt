@@ -1,4 +1,3 @@
-
 use bytes::Bytes;
 use oxidebt_bencode::{encode, Value};
 use sha1::{Digest, Sha1};

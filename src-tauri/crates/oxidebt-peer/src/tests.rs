@@ -1,4 +1,3 @@
-
 use super::*;
 use crate::choking::PeerStats;
 use crate::message::Handshake;
@@ -694,7 +693,6 @@ fn test_piece_manager_verified_count_with_completion() {
 
 #[test]
 fn stress_test_piece_manager_progressive_verification() {
-
     let pm = PieceManager::new(100, 262144, 26214400);
     let peer_bf = Bitfield::full(100);
     pm.update_availability(&peer_bf);

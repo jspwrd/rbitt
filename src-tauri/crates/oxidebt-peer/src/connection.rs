@@ -246,7 +246,10 @@ impl PeerConnection {
             buffer.extend_from_slice(&bytes);
         }
 
-        self.stream.write_all(&buffer).await.map_err(PeerError::Io)?;
+        self.stream
+            .write_all(&buffer)
+            .await
+            .map_err(PeerError::Io)?;
         self.last_message_sent = Instant::now();
 
         Ok(())
@@ -449,7 +452,12 @@ impl PeerConnection {
         if !self.supports_fast {
             return Ok(());
         }
-        let pieces: Vec<u32> = self.fast_state.allowed_fast_set_outgoing.iter().copied().collect();
+        let pieces: Vec<u32> = self
+            .fast_state
+            .allowed_fast_set_outgoing
+            .iter()
+            .copied()
+            .collect();
         for piece_index in pieces {
             self.send(Message::AllowedFast { piece_index }).await?;
         }

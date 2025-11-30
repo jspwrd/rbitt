@@ -1,4 +1,3 @@
-
 pub mod decode;
 mod encode;
 mod error;

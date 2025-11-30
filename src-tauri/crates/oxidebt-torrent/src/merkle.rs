@@ -1,4 +1,3 @@
-
 use crate::error::TorrentError;
 use sha2::{Digest, Sha256};
 
