@@ -3263,6 +3263,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "dirs 5.0.1",
+ "futures",
  "oxidebt-bencode",
  "oxidebt-constants",
  "oxidebt-dht",

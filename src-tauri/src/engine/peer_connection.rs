@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use oxidebt_constants::{
-    KEEPALIVE_INTERVAL, MAX_PARALLEL_PIECES, MAX_REQUESTS_PER_PEER, PEX_INITIAL_DELAY,
-    PEX_MAX_IPV4_PEERS, PEX_SEND_INTERVAL,
+    KEEPALIVE_INTERVAL, MAX_PARALLEL_PIECES, MAX_REQUEST_LENGTH, MAX_REQUESTS_PER_PEER,
+    PEX_INITIAL_DELAY, PEX_MAX_IPV4_PEERS, PEX_SEND_INTERVAL,
 };
 use oxidebt_disk::DiskManager;
 use oxidebt_net::BandwidthLimiter;
@@ -12,6 +12,7 @@ use oxidebt_peer::{
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -36,6 +37,7 @@ pub async fn handle_incoming_connection(
     bandwidth_limiter: Arc<RwLock<BandwidthLimiter>>,
     event_tx: mpsc::UnboundedSender<PeerEvent>,
     listen_port: u16,
+    no_seed_mode: Arc<AtomicBool>,
 ) -> Result<(), EngineError> {
     let mut buf = [0u8; 68];
     timeout(HANDSHAKE_TIMEOUT, stream.read_exact(&mut buf))
@@ -88,6 +90,7 @@ pub async fn handle_incoming_connection(
         bandwidth_limiter,
         event_tx,
         listen_port,
+        no_seed_mode,
     )
     .await
 }
@@ -103,6 +106,7 @@ pub async fn handle_peer_connection(
     bandwidth_limiter: Arc<RwLock<BandwidthLimiter>>,
     event_tx: mpsc::UnboundedSender<PeerEvent>,
     listen_port: u16,
+    no_seed_mode: Arc<AtomicBool>,
 ) -> Result<(), EngineError> {
     if conn.state() != oxidebt_peer::PeerState::Connected {
         conn.handshake().await?;
@@ -172,6 +176,7 @@ pub async fn handle_peer_connection(
         cancel_rx,
         shutdown_rx,
         listen_port,
+        &no_seed_mode,
     )
     .await;
 
@@ -195,6 +200,7 @@ async fn peer_message_loop(
     mut cancel_rx: tokio::sync::broadcast::Receiver<u32>,
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     listen_port: u16,
+    no_seed_mode: &Arc<AtomicBool>,
 ) -> Result<(), EngineError> {
     let mut last_pex_time = Instant::now() - PEX_INITIAL_DELAY;
     let mut pex_sent_peers: HashSet<SocketAddr> = HashSet::new();
@@ -223,6 +229,7 @@ async fn peer_message_loop(
                     &mut sent_initial_pex,
                     &mut last_pex_time,
                     listen_port,
+                    no_seed_mode,
                 ).await?;
             }
             _ = tokio::time::sleep(KEEPALIVE_INTERVAL / 4) => {
@@ -262,6 +269,7 @@ async fn handle_message(
     sent_initial_pex: &mut bool,
     last_pex_time: &mut Instant,
     listen_port: u16,
+    no_seed_mode: &Arc<AtomicBool>,
 ) -> Result<(), EngineError> {
     match message {
         Message::Unchoke => {
@@ -335,7 +343,7 @@ async fn handle_message(
         Message::Request { index, begin, length } => {
             handle_request_message(
                 hash, peer_addr, conn, torrents, disk_manager, bandwidth_limiter, event_tx,
-                index, begin, length,
+                index, begin, length, no_seed_mode,
             )
             .await?;
         }
@@ -541,17 +549,51 @@ async fn handle_request_message(
     index: u32,
     begin: u32,
     length: u32,
+    no_seed_mode: &Arc<AtomicBool>,
 ) -> Result<(), EngineError> {
-    let (have_piece, should_serve) = {
+    // BUG FIX 1: Validate request length per BEP 3 (max 128KB)
+    if length > MAX_REQUEST_LENGTH {
+        tracing::warn!(
+            "Rejecting oversized request from {}: {} bytes (max {})",
+            peer_addr,
+            length,
+            MAX_REQUEST_LENGTH
+        );
+        if conn.supports_fast() {
+            conn.send(Message::RejectRequest { index, begin, length }).await?;
+        }
+        return Ok(());
+    }
+
+    // No Seed Mode: reject all upload requests
+    if no_seed_mode.load(Ordering::Relaxed) {
+        tracing::debug!(
+            "No Seed Mode: rejecting request from {} for piece {}",
+            peer_addr,
+            index
+        );
+        if conn.supports_fast() {
+            conn.send(Message::RejectRequest { index, begin, length }).await?;
+        }
+        return Ok(());
+    }
+
+    // Gather information about whether we can serve this request
+    let (have_piece, is_unchoked, is_allowed_fast) = {
         let torrents = torrents.read();
         if let Some(torrent) = torrents.get(hash) {
             let have = torrent.piece_manager.bitfield().has_piece(index as usize);
             let unchoked = torrent.unchoked_peers.contains(&peer_addr);
-            (have, have && unchoked)
+            // BUG FIX 2: Check if this piece is in the AllowedFast set
+            let allowed_fast = conn.get_allowed_fast_set().contains(&index);
+            (have, unchoked, allowed_fast)
         } else {
-            (false, false)
+            (false, false, false)
         }
     };
+
+    // We serve if we have the piece AND (peer is unchoked OR piece is AllowedFast)
+    let should_serve = have_piece && (is_unchoked || is_allowed_fast);
 
     if should_serve {
         let upload_limiter = bandwidth_limiter.read().upload_limiter();
@@ -564,37 +606,47 @@ async fn handle_request_message(
         conn.send(Message::Piece { index, begin, data }).await?;
 
         tracing::debug!(
-            "Served block to {}: piece {} offset {} len {} (total served this session)",
+            "Served block to {}: piece {} offset {} len {}{}",
             peer_addr,
             index,
             begin,
-            length
+            length,
+            if is_allowed_fast && !is_unchoked { " (AllowedFast)" } else { "" }
         );
 
         let _ = event_tx.send(PeerEvent::BlockSent {
             torrent_hash: hash.to_string(),
             size: length as u64,
         });
-    } else if have_piece && !conn.am_choking() {
+    } else if have_piece {
+        // BUG FIX 3: Send RejectRequest when we have the piece but won't serve
+        // (only if Fast Extension is supported, per BEP 6)
+        if conn.supports_fast() {
+            tracing::debug!(
+                "Rejecting request from {}: piece {} (unchoked={}, allowed_fast={})",
+                peer_addr,
+                index,
+                is_unchoked,
+                is_allowed_fast
+            );
+            conn.send(Message::RejectRequest { index, begin, length }).await?;
+        } else {
+            // Per BEP 3: silently ignore requests from choked peers
+            tracing::debug!(
+                "Ignoring request from choked peer {}: piece {}",
+                peer_addr,
+                index
+            );
+        }
+    } else {
+        // We don't have the piece - send RejectRequest if Fast Extension supported
+        if conn.supports_fast() {
+            conn.send(Message::RejectRequest { index, begin, length }).await?;
+        }
         tracing::debug!(
-            "Rejecting request from {}: piece {} (have={}, in_unchoked={})",
+            "Rejecting request from {}: we don't have piece {}",
             peer_addr,
-            index,
-            have_piece,
-            should_serve
-        );
-        conn.send(Message::RejectRequest { index, begin, length })
-            .await?;
-    } else if !should_serve {
-        tracing::debug!(
-            "Not serving request from {}: piece {} (have={}, in_unchoked_peers={})",
-            peer_addr,
-            index,
-            have_piece,
-            {
-                let torrents = torrents.read();
-                torrents.get(hash).map(|t| t.unchoked_peers.contains(&peer_addr)).unwrap_or(false)
-            }
+            index
         );
     }
 

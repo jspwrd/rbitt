@@ -1022,6 +1022,19 @@ body {
   accent-color: var(--accent);
 }
 
+.checkbox-label.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.checkbox-label.disabled input[type="checkbox"] {
+  cursor: not-allowed;
+}
+
+.setting-note.disabled {
+  opacity: 0.5;
+}
+
 .setting-note {
   font-size: 0.8rem;
   color: var(--warning);

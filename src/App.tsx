@@ -279,6 +279,8 @@ function App() {
   const [maxActiveUploads, setMaxActiveUploads] = useState(5);
   const [askDownloadLocation, setAskDownloadLocation] = useState(false);
   const [tempDownloadDir, setTempDownloadDir] = useState("");
+  const [noSeedMode, setNoSeedMode] = useState(false);
+  const [disconnectOnComplete, setDisconnectOnComplete] = useState(false);
 
   const [trackerInfo, setTrackerInfo] = useState<TrackerStatusInfo[]>([]);
 
@@ -342,6 +344,8 @@ function App() {
   useEffect(() => {
     if (engineInitialized) {
       loadQueueSettings();
+      loadNoSeedMode();
+      loadDisconnectOnComplete();
     }
   }, [engineInitialized]);
 
@@ -576,6 +580,42 @@ function App() {
       setMaxActiveUploads(settings[1]);
     } catch (err) {
       console.error("Failed to load queue settings:", err);
+    }
+  }
+
+  async function loadNoSeedMode() {
+    try {
+      const enabled: boolean = await invoke("get_no_seed_mode");
+      setNoSeedMode(enabled);
+    } catch (err) {
+      console.error("Failed to load no-seed mode:", err);
+    }
+  }
+
+  async function toggleNoSeedMode(enabled: boolean) {
+    try {
+      await invoke("set_no_seed_mode", { enabled });
+      setNoSeedMode(enabled);
+    } catch (err) {
+      setError(String(err));
+    }
+  }
+
+  async function loadDisconnectOnComplete() {
+    try {
+      const enabled: boolean = await invoke("get_disconnect_on_complete");
+      setDisconnectOnComplete(enabled);
+    } catch (err) {
+      console.error("Failed to load disconnect on complete:", err);
+    }
+  }
+
+  async function toggleDisconnectOnComplete(enabled: boolean) {
+    try {
+      await invoke("set_disconnect_on_complete", { enabled });
+      setDisconnectOnComplete(enabled);
+    } catch (err) {
+      setError(String(err));
     }
   }
 
@@ -1411,6 +1451,37 @@ function App() {
                 <button className="btn-primary" onClick={applyQueueSettings}>
                   Apply Queue Settings
                 </button>
+              </div>
+
+              <div className="settings-section">
+                <h3>Seeding</h3>
+                <div className="setting-row checkbox-row">
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={noSeedMode}
+                      onChange={(e) => toggleNoSeedMode(e.target.checked)}
+                    />
+                    <span>No Seed Mode</span>
+                  </label>
+                </div>
+                <p className="text-secondary setting-note">
+                  When enabled, completed torrents will not upload to other peers.
+                </p>
+                <div className="setting-row checkbox-row">
+                  <label className={`checkbox-label ${!noSeedMode ? "disabled" : ""}`}>
+                    <input
+                      type="checkbox"
+                      checked={disconnectOnComplete}
+                      onChange={(e) => toggleDisconnectOnComplete(e.target.checked)}
+                      disabled={!noSeedMode}
+                    />
+                    <span>Disconnect on Complete</span>
+                  </label>
+                </div>
+                <p className={`text-secondary setting-note ${!noSeedMode ? "disabled" : ""}`}>
+                  When enabled, disconnect all peers when a torrent completes.
+                </p>
               </div>
 
               <div className="settings-section">

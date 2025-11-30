@@ -166,6 +166,17 @@ impl RateCalculator {
         self.smoothed_rate = 0.0;
         self.instant_rate = 0.0;
     }
+
+    /// Sets the baseline total without counting as transferred bytes.
+    /// Use this when restoring state from disk or after verification.
+    pub fn set_baseline(&mut self, total: u64) {
+        self.last_total = total;
+        // Clear any samples since they're now relative to the old baseline
+        self.samples.clear();
+        self.last_sample_time = None;
+        self.smoothed_rate = 0.0;
+        self.instant_rate = 0.0;
+    }
 }
 
 impl Default for RateCalculator {
@@ -230,6 +241,14 @@ impl TorrentStats {
         let now = Instant::now();
         self.upload_rate_calc.update(self.uploaded, now);
         self.upload_rate = self.upload_rate_calc.rate();
+    }
+
+    /// Sets the downloaded byte count without affecting the rate calculation.
+    /// Use this after verification to set the baseline for already-present data.
+    pub fn set_downloaded_baseline(&mut self, bytes: u64) {
+        self.downloaded = self.downloaded.max(bytes);
+        self.download_rate_calc.set_baseline(self.downloaded);
+        self.download_rate = 0.0;
     }
 }
 

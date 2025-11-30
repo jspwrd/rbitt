@@ -63,6 +63,7 @@ oxidebt-net = { path = "crates/oxidebt-net" }
 bytes = "1.9"
 sha1 = { workspace = true }
 sha2 = { workspace = true }
+futures = { workspace = true }
 dirs = "5.0"
 
 [dev-dependencies]

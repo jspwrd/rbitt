@@ -64,6 +64,9 @@ pub const CONNECTION_SPEED: usize = 100;
 
 pub const BLOCK_SIZE: usize = 16384;
 
+/// Maximum request length per BEP 3 (128KB). Requests larger than this are suspicious.
+pub const MAX_REQUEST_LENGTH: u32 = 131072;
+
 pub const MAX_CONCURRENT_PIECES: usize = 50;
 
 /// Maximum pieces to work on in parallel per peer connection.

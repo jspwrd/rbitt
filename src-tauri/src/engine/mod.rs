@@ -36,7 +36,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::TcpListener;
@@ -62,6 +62,10 @@ pub struct TorrentEngine {
     global_connections: Arc<AtomicUsize>,
     max_active_downloads: Arc<AtomicUsize>,
     max_active_uploads: Arc<AtomicUsize>,
+    /// When enabled, rejects all incoming block requests and prevents seeding
+    no_seed_mode: Arc<AtomicBool>,
+    /// When enabled, disconnect all peers when a torrent completes (only applies when no_seed_mode is enabled)
+    disconnect_on_complete: Arc<AtomicBool>,
 }
 
 impl TorrentEngine {
@@ -139,6 +143,8 @@ impl TorrentEngine {
             global_connections: Arc::new(AtomicUsize::new(0)),
             max_active_downloads: Arc::new(AtomicUsize::new(5)),
             max_active_uploads: Arc::new(AtomicUsize::new(5)),
+            no_seed_mode: Arc::new(AtomicBool::new(false)),
+            disconnect_on_complete: Arc::new(AtomicBool::new(false)),
         };
 
         engine.start_background_tasks();
@@ -165,6 +171,7 @@ impl TorrentEngine {
         let bandwidth_limiter = self.bandwidth_limiter.clone();
         let event_tx = self.event_tx.clone();
         let global_connections = self.global_connections.clone();
+        let no_seed_mode = self.no_seed_mode.clone();
 
         tokio::spawn(async move {
             let listener = match TcpListener::bind(format!("0.0.0.0:{}", initial_port)).await {
@@ -213,6 +220,7 @@ impl TorrentEngine {
                         let event_tx = event_tx.clone();
                         let port = listen_port.load(Ordering::Relaxed);
                         let global_conns = global_connections.clone();
+                        let no_seed = no_seed_mode.clone();
 
                         // Increment global connection counter
                         global_conns.fetch_add(1, Ordering::Relaxed);
@@ -227,6 +235,7 @@ impl TorrentEngine {
                                 bandwidth_limiter,
                                 event_tx,
                                 port,
+                                no_seed,
                             )
                             .await;
                             // Decrement global connection counter when done
@@ -244,6 +253,8 @@ impl TorrentEngine {
     fn start_event_processor(&self) {
         let torrents = self.torrents.clone();
         let event_rx = self.event_rx.clone();
+        let no_seed_mode = self.no_seed_mode.clone();
+        let disconnect_on_complete = self.disconnect_on_complete.clone();
 
         tokio::spawn(async move {
             let mut rx = match event_rx.write().take() {
@@ -302,8 +313,25 @@ impl TorrentEngine {
                             if torrent.piece_manager.is_complete()
                                 && torrent.state == TorrentState::Downloading
                             {
-                                torrent.state = TorrentState::Seeding;
+                                torrent.state = TorrentState::Completed;
                                 tracing::info!("Torrent {} download complete!", torrent_hash);
+
+                                // If no_seed_mode and disconnect_on_complete are both enabled,
+                                // disconnect all peers for this completed torrent
+                                if no_seed_mode.load(Ordering::Relaxed)
+                                    && disconnect_on_complete.load(Ordering::Relaxed)
+                                {
+                                    tracing::info!(
+                                        "Disconnecting all peers for completed torrent {} (no-seed mode with disconnect on complete)",
+                                        torrent_hash
+                                    );
+                                    let _ = torrent.shutdown_tx.send(());
+                                    torrent.peers.clear();
+                                    torrent.connecting_peers.clear();
+                                    torrent.unchoked_peers.clear();
+                                    torrent.stats.download_rate = 0.0;
+                                    torrent.stats.upload_rate = 0.0;
+                                }
                             }
                         }
                     }
@@ -845,6 +873,30 @@ impl TorrentEngine {
         limiter.set_upload_limit(upload_limit);
     }
 
+    /// Sets no seed mode. When enabled, the client rejects all upload requests
+    /// and torrents will not transition to seeding state.
+    pub fn set_no_seed_mode(&self, enabled: bool) {
+        self.no_seed_mode.store(enabled, Ordering::Relaxed);
+        tracing::info!("No Seed Mode {}", if enabled { "enabled" } else { "disabled" });
+    }
+
+    /// Returns whether no seed mode is currently enabled.
+    pub fn is_no_seed_mode(&self) -> bool {
+        self.no_seed_mode.load(Ordering::Relaxed)
+    }
+
+    /// Sets disconnect on complete mode. When enabled along with no_seed_mode,
+    /// all peers will be disconnected when a torrent completes.
+    pub fn set_disconnect_on_complete(&self, enabled: bool) {
+        self.disconnect_on_complete.store(enabled, Ordering::Relaxed);
+        tracing::info!("Disconnect on Complete {}", if enabled { "enabled" } else { "disabled" });
+    }
+
+    /// Returns whether disconnect on complete mode is currently enabled.
+    pub fn is_disconnect_on_complete(&self) -> bool {
+        self.disconnect_on_complete.load(Ordering::Relaxed)
+    }
+
     /// Adds a torrent from a file path.
     pub async fn add_torrent_file(&self, path: &str) -> Result<String, EngineError> {
         let data = tokio::fs::read(path).await?;
@@ -1039,6 +1091,8 @@ impl TorrentEngine {
         let global_connections = self.global_connections.clone();
         let max_active_downloads = self.max_active_downloads.clone();
         let max_active_uploads = self.max_active_uploads.clone();
+        let no_seed_mode_for_start = self.no_seed_mode.clone();
+        let disconnect_on_complete_for_start = self.disconnect_on_complete.clone();
 
         tokio::spawn(async move {
             tracing::info!(
@@ -1065,32 +1119,46 @@ impl TorrentEngine {
             let mut valid_count = 0usize;
             let mut downloaded_bytes = 0u64;
 
-            for i in 0..piece_count {
-                let piece_idx = i as u32;
+            const BATCH_SIZE: usize = 32;
 
-                let is_valid = disk_manager_for_verify
-                    .verify_piece(&hash_for_verify, piece_idx)
-                    .await
-                    .unwrap_or_default();
+            for batch_start in (0..piece_count).step_by(BATCH_SIZE) {
+                let batch_end = (batch_start + BATCH_SIZE).min(piece_count);
 
+                // Create futures for all pieces in this batch
+                let mut futures = Vec::with_capacity(batch_end - batch_start);
+                for i in batch_start..batch_end {
+                    let dm = disk_manager_for_verify.clone();
+                    let hash = hash_for_verify.clone();
+                    futures.push(async move {
+                        (i as u32, dm.verify_piece(&hash, i as u32).await.unwrap_or(false))
+                    });
+                }
+
+                // Run all verifications in parallel
+                let batch_results = futures::future::join_all(futures).await;
+
+                // Update piece manager with results
                 {
                     let torrents = torrents_for_verify.read();
                     if let Some(torrent) = torrents.get(&hash_for_verify) {
-                        if is_valid {
-                            torrent.piece_manager.mark_piece_complete(piece_idx);
-                            valid_count += 1;
-                            downloaded_bytes += torrent.piece_size(piece_idx);
+                        for (piece_idx, is_valid) in batch_results {
+                            if is_valid {
+                                torrent.piece_manager.mark_piece_complete(piece_idx);
+                                valid_count += 1;
+                                downloaded_bytes += torrent.piece_size(piece_idx);
+                            }
+                            torrent.piece_manager.mark_piece_verified(piece_idx);
                         }
-                        torrent.piece_manager.mark_piece_verified(piece_idx);
                     } else {
                         return;
                     }
                 }
 
-                if piece_count > 100 && (i + 1) % 100 == 0 {
+                // Progress logging
+                if piece_count > 100 && batch_end % 100 < BATCH_SIZE {
                     tracing::debug!(
                         "Verified {}/{} pieces for {} ({} valid so far)",
-                        i + 1,
+                        batch_end,
                         piece_count,
                         hash_for_verify,
                         valid_count
@@ -1106,9 +1174,9 @@ impl TorrentEngine {
 
                 // First, update stats and mark verification complete, get info for queue calculation
                 let transition_info = if let Some(torrent) = torrents.get_mut(&hash_for_verify) {
-                    // Use max to avoid losing blocks downloaded during verification
-                    // (race condition between BlockReceived events and verification completing)
-                    torrent.stats.downloaded = torrent.stats.downloaded.max(downloaded_bytes);
+                    // Use set_downloaded_baseline to avoid a bogus download rate spike
+                    // (verified data wasn't downloaded this session, so shouldn't affect rate)
+                    torrent.stats.set_downloaded_baseline(downloaded_bytes);
                     torrent.piece_manager.mark_verification_complete();
 
                     let is_complete = torrent.piece_manager.is_complete();
@@ -1156,9 +1224,9 @@ impl TorrentEngine {
                                 if is_complete { max_ul } else { max_dl }
                             );
                         } else if is_complete {
-                            torrent.state = TorrentState::Seeding;
+                            torrent.state = TorrentState::Completed;
                             tracing::info!(
-                                "Verification done: Torrent {} is complete, transitioning to Seeding (position {})",
+                                "Verification done: Torrent {} is complete, transitioning to Completed (position {})",
                                 hash_for_verify,
                                 queue_position
                             );
@@ -1189,6 +1257,8 @@ impl TorrentEngine {
                 global_connections,
                 max_active_downloads,
                 max_active_uploads,
+                no_seed_mode_for_start,
+                disconnect_on_complete_for_start,
             )
             .await
             {
@@ -1213,6 +1283,8 @@ impl TorrentEngine {
             self.global_connections.clone(),
             self.max_active_downloads.clone(),
             self.max_active_uploads.clone(),
+            self.no_seed_mode.clone(),
+            self.disconnect_on_complete.clone(),
         )
         .await
     }
@@ -1231,6 +1303,8 @@ impl TorrentEngine {
         global_connections: Arc<AtomicUsize>,
         max_active_downloads: Arc<AtomicUsize>,
         max_active_uploads: Arc<AtomicUsize>,
+        no_seed_mode: Arc<AtomicBool>,
+        disconnect_on_complete: Arc<AtomicBool>,
     ) -> Result<(), EngineError> {
         tracing::info!("start_torrent_internal called for {}", hash);
 
@@ -1309,9 +1383,9 @@ impl TorrentEngine {
                                 if is_complete { max_ul } else { max_dl }
                             );
                         } else if is_complete {
-                            torrent.state = TorrentState::Seeding;
+                            torrent.state = TorrentState::Completed;
                             tracing::info!(
-                                "Torrent {} (V2-only) transitioning to Seeding (position {})",
+                                "Torrent {} (V2-only) transitioning to Completed (position {})",
                                 hash,
                                 queue_position
                             );
@@ -1438,16 +1512,17 @@ impl TorrentEngine {
             let transition_info = if let Some(torrent) = torrents_guard.get(hash) {
                 let known_peers_count = torrent.known_peers.len();
                 let verification_complete = torrent.piece_manager.is_verification_complete();
+                let current_is_complete = torrent.piece_manager.is_complete();
                 tracing::info!(
                     "Torrent {} state transition: current={:?}, is_complete={}, known_peers={}, verification_complete={}",
                     hash,
                     torrent.state,
-                    is_complete,
+                    current_is_complete,
                     known_peers_count,
                     verification_complete
                 );
                 if torrent.state == TorrentState::Checking && verification_complete {
-                    let is_complete = torrent.piece_manager.is_complete();
+                    let is_complete = current_is_complete;
                     let added_at = torrent.added_at;
                     Some((is_complete, added_at, known_peers_count))
                 } else {
@@ -1487,9 +1562,9 @@ impl TorrentEngine {
                             if is_complete { max_ul } else { max_dl }
                         );
                     } else if is_complete {
-                        torrent.state = TorrentState::Seeding;
+                        torrent.state = TorrentState::Completed;
                         tracing::info!(
-                            "Torrent {} is complete, transitioning to Seeding (position {})",
+                            "Torrent {} is complete, transitioning to Completed (position {})",
                             hash,
                             queue_position
                         );
@@ -1519,6 +1594,8 @@ impl TorrentEngine {
             let hash_clone = hash.to_string();
             let torrents_clone = torrents.clone();
 
+            let no_seed_mode_clone = no_seed_mode.clone();
+            let disconnect_on_complete_clone = disconnect_on_complete.clone();
             tokio::spawn(async move {
                 Self::run_torrent(
                     hash_clone,
@@ -1530,6 +1607,8 @@ impl TorrentEngine {
                     tracker_client,
                     listen_port,
                     global_connections,
+                    no_seed_mode_clone,
+                    disconnect_on_complete_clone,
                 )
                 .await;
             });
@@ -1549,6 +1628,8 @@ impl TorrentEngine {
         tracker_client: Arc<TrackerClient>,
         listen_port: Arc<AtomicU16>,
         global_connections: Arc<AtomicUsize>,
+        no_seed_mode: Arc<AtomicBool>,
+        disconnect_on_complete: Arc<AtomicBool>,
     ) {
         tracing::info!("run_torrent started for {}", hash);
         loop {
@@ -1568,22 +1649,34 @@ impl TorrentEngine {
                         0,
                     )),
                     TorrentState::Downloading | TorrentState::Seeding | TorrentState::Completed => {
-                        let mut peers_to_connect: HashSet<_> = torrent
-                            .known_peers
-                            .iter()
-                            .filter(|p| {
-                                !torrent.peers.contains_key(p)
-                                    && !torrent.connecting_peers.contains(p)
-                            })
-                            .cloned()
-                            .collect();
+                        // Skip peer connections for Completed torrents when both no_seed_mode
+                        // and disconnect_on_complete are enabled
+                        let skip_connections = torrent.state == TorrentState::Completed
+                            && no_seed_mode.load(Ordering::Relaxed)
+                            && disconnect_on_complete.load(Ordering::Relaxed);
 
-                        for (addr, failed) in &torrent.failed_peers {
-                            if failed.is_ready_for_retry()
-                                && !torrent.peers.contains_key(addr)
-                                && !torrent.connecting_peers.contains(addr)
-                            {
-                                peers_to_connect.insert(*addr);
+                        let mut peers_to_connect: HashSet<_> = if skip_connections {
+                            HashSet::new()
+                        } else {
+                            torrent
+                                .known_peers
+                                .iter()
+                                .filter(|p| {
+                                    !torrent.peers.contains_key(p)
+                                        && !torrent.connecting_peers.contains(p)
+                                })
+                                .cloned()
+                                .collect()
+                        };
+
+                        if !skip_connections {
+                            for (addr, failed) in &torrent.failed_peers {
+                                if failed.is_ready_for_retry()
+                                    && !torrent.peers.contains_key(addr)
+                                    && !torrent.connecting_peers.contains(addr)
+                                {
+                                    peers_to_connect.insert(*addr);
+                                }
                             }
                         }
 
@@ -1714,6 +1807,7 @@ impl TorrentEngine {
                     let event_tx_clone = event_tx.clone();
                     let port = listen_port.load(Ordering::Relaxed);
                     let global_conns = global_connections.clone();
+                    let no_seed = no_seed_mode.clone();
 
                     // Increment global connection counter
                     global_conns.fetch_add(1, Ordering::Relaxed);
@@ -1734,6 +1828,7 @@ impl TorrentEngine {
                                     bandwidth_limiter_clone,
                                     event_tx_clone.clone(),
                                     port,
+                                    no_seed,
                                 )
                                 .await
                                 {
@@ -1809,9 +1904,9 @@ impl TorrentEngine {
                     if torrent.piece_manager.is_complete()
                         && torrent.state == TorrentState::Downloading
                     {
-                        torrent.state = TorrentState::Seeding;
+                        torrent.state = TorrentState::Completed;
                         tracing::info!(
-                            "Torrent {} download complete, transitioning to Seeding",
+                            "Torrent {} download complete, transitioning to Completed",
                             hash
                         );
                     }
@@ -1829,7 +1924,7 @@ impl TorrentEngine {
                                 "Torrent {} has no interested peers, transitioning to Completed",
                                 hash
                             );
-                        } else if torrent.state == TorrentState::Completed && peers_interested {
+                        } else if torrent.state == TorrentState::Completed && peers_interested && !no_seed_mode.load(Ordering::Relaxed) {
                             torrent.state = TorrentState::Seeding;
                             tracing::info!(
                                 "Torrent {} has interested peers, transitioning to Seeding",
@@ -2096,7 +2191,7 @@ impl TorrentEngine {
             }
 
             if is_complete {
-                torrent.state = TorrentState::Seeding;
+                torrent.state = TorrentState::Completed;
             } else {
                 torrent.state = TorrentState::Downloading;
             }
@@ -2245,7 +2340,7 @@ impl TorrentEngine {
                 if let Some(torrent) = torrents.get_mut(&hash) {
                     let complete = torrent.piece_manager.is_complete();
                     if complete {
-                        torrent.state = TorrentState::Seeding;
+                        torrent.state = TorrentState::Completed;
                     } else {
                         torrent.state = TorrentState::Downloading;
                     }

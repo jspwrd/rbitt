@@ -336,6 +336,48 @@ async fn get_queue_settings(state: State<'_, AppState>) -> Result<(usize, usize)
 }
 
 #[tauri::command]
+async fn set_no_seed_mode(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let guard = state.engine.read().await;
+    let engine = guard
+        .as_ref()
+        .ok_or_else(|| "Engine not initialized".to_string())?;
+
+    engine.set_no_seed_mode(enabled);
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_no_seed_mode(state: State<'_, AppState>) -> Result<bool, String> {
+    let guard = state.engine.read().await;
+    let engine = guard
+        .as_ref()
+        .ok_or_else(|| "Engine not initialized".to_string())?;
+
+    Ok(engine.is_no_seed_mode())
+}
+
+#[tauri::command]
+async fn set_disconnect_on_complete(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    let guard = state.engine.read().await;
+    let engine = guard
+        .as_ref()
+        .ok_or_else(|| "Engine not initialized".to_string())?;
+
+    engine.set_disconnect_on_complete(enabled);
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_disconnect_on_complete(state: State<'_, AppState>) -> Result<bool, String> {
+    let guard = state.engine.read().await;
+    let engine = guard
+        .as_ref()
+        .ok_or_else(|| "Engine not initialized".to_string())?;
+
+    Ok(engine.is_disconnect_on_complete())
+}
+
+#[tauri::command]
 async fn parse_torrent_bytes(data: Vec<u8>) -> Result<TorrentInfo, String> {
     let meta =
         Metainfo::from_bytes(&data).map_err(|e| format!("Failed to parse torrent: {}", e))?;
@@ -447,6 +489,10 @@ pub fn run() {
             set_bandwidth_limits,
             set_queue_settings,
             get_queue_settings,
+            set_no_seed_mode,
+            get_no_seed_mode,
+            set_disconnect_on_complete,
+            get_disconnect_on_complete,
             get_default_download_dir,
         ])
         .run(tauri::generate_context!())
