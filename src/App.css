@@ -1151,3 +1151,159 @@ input:focus-visible {
 .tracker-status.status-not-contacted {
   color: var(--text-secondary);
 }
+
+.tracker-message {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+/* ==================== Peer Table ==================== */
+.peer-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 12px;
+}
+
+.peer-table th,
+.peer-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.peer-table th {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-weight: 500;
+  position: sticky;
+  top: 0;
+}
+
+.peer-table td {
+  color: var(--text-primary);
+}
+
+.peer-table tr:hover {
+  background: var(--bg-hover);
+}
+
+.peer-address {
+  font-size: 11px;
+}
+
+.peer-status {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.progress-bar-container.small {
+  height: 4px;
+  width: 60px;
+}
+
+.peers-summary {
+  padding: 8px 0;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 8px;
+}
+
+/* ==================== File Table ==================== */
+.file-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.file-table th,
+.file-table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.file-table th {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-weight: 500;
+  position: sticky;
+  top: 0;
+}
+
+.file-table td {
+  color: var(--text-primary);
+}
+
+.file-table tr:hover {
+  background: var(--bg-hover);
+}
+
+.file-path {
+  max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-progress {
+  position: relative;
+  width: 100px;
+  height: 16px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.file-progress-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: var(--accent-color);
+  transition: width 0.3s ease;
+}
+
+.file-progress-text {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* ==================== Preview Trackers ==================== */
+.preview-trackers {
+  margin-top: 12px;
+}
+
+.preview-trackers summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.preview-trackers ul {
+  list-style: none;
+  padding: 8px 0 0 0;
+  max-height: 100px;
+  overflow-y: auto;
+}
+
+.preview-trackers li {
+  font-size: 11px;
+  color: var(--text-secondary);
+  padding: 2px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

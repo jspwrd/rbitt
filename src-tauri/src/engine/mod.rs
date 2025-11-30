@@ -2130,6 +2130,69 @@ impl TorrentEngine {
         )
     }
 
+    /// Returns file information for a torrent including per-file progress.
+    pub fn get_torrent_files(&self, hash: &str) -> Option<Vec<crate::TorrentFileInfo>> {
+        let torrents = self.torrents.read();
+        let torrent = torrents.get(hash)?;
+
+        let piece_length = torrent.meta.info.piece_length;
+        let bitfield = torrent.piece_manager.bitfield();
+
+        let files: Vec<crate::TorrentFileInfo> = torrent
+            .meta
+            .info
+            .files
+            .iter()
+            .scan(0u64, |file_offset, file| {
+                let start_offset = *file_offset;
+                let end_offset = start_offset + file.length;
+                *file_offset = end_offset;
+
+                // Calculate which pieces this file spans
+                let first_piece = (start_offset / piece_length) as usize;
+                let last_piece = if file.length == 0 {
+                    first_piece
+                } else {
+                    ((end_offset - 1) / piece_length) as usize
+                };
+
+                // Calculate downloaded bytes for this file
+                let mut downloaded: u64 = 0;
+
+                for piece_idx in first_piece..=last_piece {
+                    if bitfield.has_piece(piece_idx) {
+                        // Calculate how much of this piece belongs to this file
+                        let piece_start = (piece_idx as u64) * piece_length;
+                        let piece_end = piece_start + torrent.piece_size(piece_idx as u32);
+
+                        // Overlap between [piece_start, piece_end) and [start_offset, end_offset)
+                        let overlap_start = piece_start.max(start_offset);
+                        let overlap_end = piece_end.min(end_offset);
+
+                        if overlap_end > overlap_start {
+                            downloaded += overlap_end - overlap_start;
+                        }
+                    }
+                }
+
+                let progress = if file.length > 0 {
+                    (downloaded as f64 / file.length as f64) * 100.0
+                } else {
+                    100.0
+                };
+
+                Some(crate::TorrentFileInfo {
+                    path: file.path.display().to_string(),
+                    size: file.length,
+                    progress,
+                    downloaded,
+                })
+            })
+            .collect();
+
+        Some(files)
+    }
+
     pub async fn pause(&self, hash: &str) -> Result<(), EngineError> {
         {
             let mut torrents = self.torrents.write();

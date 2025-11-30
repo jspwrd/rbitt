@@ -224,6 +224,32 @@ interface TrackerStatusInfo {
   message: string | null;
 }
 
+interface PeerStatusInfo {
+  address: string;
+  download_bytes: number;
+  upload_bytes: number;
+  is_choking_us: boolean;
+  is_interested: boolean;
+  progress: number;
+}
+
+interface TorrentFileInfo {
+  path: string;
+  size: number;
+  progress: number;
+  downloaded: number;
+}
+
+interface GlobalStats {
+  download_rate: number;
+  upload_rate: number;
+  total_downloaded: number;
+  total_uploaded: number;
+  active_torrents: number;
+  total_peers: number;
+  global_connections: number;
+}
+
 type FilterType = "all" | "downloading" | "seeding" | "paused" | "checking" | "stalled" | "stalledDL" | "stalledUP" | "active";
 type DetailTab = "general" | "trackers" | "peers" | "files";
 
@@ -243,7 +269,6 @@ function formatDate(timestamp: number): string {
   return new Date(timestamp * 1000).toLocaleString();
 }
 
-void formatDate;
 
 function formatEta(downloaded: number, total: number, rate: number): string {
   if (rate === 0) return "∞";
@@ -283,6 +308,9 @@ function App() {
   const [disconnectOnComplete, setDisconnectOnComplete] = useState(false);
 
   const [trackerInfo, setTrackerInfo] = useState<TrackerStatusInfo[]>([]);
+  const [peerInfo, setPeerInfo] = useState<PeerStatusInfo[]>([]);
+  const [fileInfo, setFileInfo] = useState<TorrentFileInfo[]>([]);
+  const [globalStatsData, setGlobalStatsData] = useState<GlobalStats | null>(null);
 
   useEffect(() => {
     async function autoInit() {
@@ -340,6 +368,63 @@ function App() {
     const interval = setInterval(fetchTrackerInfo, 5000);
     return () => clearInterval(interval);
   }, [selectedTorrent, engineInitialized]);
+
+  useEffect(() => {
+    async function fetchPeerInfo() {
+      if (!selectedTorrent || !engineInitialized) {
+        setPeerInfo([]);
+        return;
+      }
+      try {
+        const info: PeerStatusInfo[] = await invoke("get_torrent_peers", {
+          infoHash: selectedTorrent,
+        });
+        setPeerInfo(info);
+      } catch (e) {
+        console.error("Failed to get peer info:", e);
+        setPeerInfo([]);
+      }
+    }
+    fetchPeerInfo();
+    const interval = setInterval(fetchPeerInfo, 2000);
+    return () => clearInterval(interval);
+  }, [selectedTorrent, engineInitialized]);
+
+  useEffect(() => {
+    async function fetchFileInfo() {
+      if (!selectedTorrent || !engineInitialized) {
+        setFileInfo([]);
+        return;
+      }
+      try {
+        const info: TorrentFileInfo[] = await invoke("get_torrent_files", {
+          infoHash: selectedTorrent,
+        });
+        setFileInfo(info);
+      } catch (e) {
+        console.error("Failed to get file info:", e);
+        setFileInfo([]);
+      }
+    }
+    fetchFileInfo();
+    const interval = setInterval(fetchFileInfo, 2000);
+    return () => clearInterval(interval);
+  }, [selectedTorrent, engineInitialized]);
+
+  useEffect(() => {
+    async function fetchGlobalStats() {
+      if (!engineInitialized) return;
+      try {
+        const stats: GlobalStats = await invoke("get_global_stats");
+        setGlobalStatsData(stats);
+      } catch (e) {
+        console.error("Failed to get global stats:", e);
+      }
+    }
+    fetchGlobalStats();
+    const interval = setInterval(fetchGlobalStats, 1000);
+    return () => clearInterval(interval);
+  }, [engineInitialized]);
 
   useEffect(() => {
     if (engineInitialized) {
@@ -1111,9 +1196,11 @@ function App() {
                             <th>URL</th>
                             <th>Status</th>
                             <th>Seeds</th>
+                            <th>Leechers</th>
                             <th>Peers</th>
                             <th>Last Announce</th>
                             <th>Next Announce</th>
+                            <th>Message</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1126,6 +1213,7 @@ function App() {
                                 {tracker.status}
                               </td>
                               <td>{tracker.seeds}</td>
+                              <td>{tracker.leechers}</td>
                               <td>{tracker.peers}</td>
                               <td>
                                 {tracker.last_announce !== null
@@ -1137,6 +1225,9 @@ function App() {
                                   ? `in ${tracker.next_announce}s`
                                   : "-"}
                               </td>
+                              <td className="tracker-message" title={tracker.message || undefined}>
+                                {tracker.message || "-"}
+                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -1147,13 +1238,90 @@ function App() {
                 {detailTab === "peers" && (
                   <div className="detail-peers">
                     <div className="peers-summary">
-                      <span>Connected to {selectedTorrentData.peers} peers ({selectedTorrentData.seeds} seeds)</span>
+                      <span>Connected to {peerInfo.length} peers ({selectedTorrentData.seeds} seeds)</span>
                     </div>
+                    {peerInfo.length === 0 ? (
+                      <p className="detail-placeholder">No peers connected.</p>
+                    ) : (
+                      <table className="peer-table">
+                        <thead>
+                          <tr>
+                            <th>Address</th>
+                            <th>Progress</th>
+                            <th>Downloaded</th>
+                            <th>Uploaded</th>
+                            <th>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {peerInfo.map((peer, idx) => (
+                            <tr key={idx}>
+                              <td className="peer-address monospace">{peer.address}</td>
+                              <td>
+                                <div className="progress-cell">
+                                  <div className="progress-bar-container small">
+                                    <div
+                                      className="progress-bar"
+                                      style={{
+                                        width: `${peer.progress}%`,
+                                        backgroundColor: peer.progress >= 100 ? "var(--state-seeding)" : "var(--state-downloading)",
+                                      }}
+                                    />
+                                  </div>
+                                  <span className="progress-text">{peer.progress.toFixed(1)}%</span>
+                                </div>
+                              </td>
+                              <td>{formatBytes(peer.download_bytes)}</td>
+                              <td>{formatBytes(peer.upload_bytes)}</td>
+                              <td className="peer-status">
+                                {peer.is_choking_us ? "Choked" : "Unchoked"}
+                                {peer.is_interested ? " / Interested" : ""}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
                   </div>
                 )}
                 {detailTab === "files" && (
                   <div className="detail-files">
-                    <p className="detail-placeholder">File information will be shown here when available.</p>
+                    {fileInfo.length === 0 ? (
+                      <p className="detail-placeholder">No files available.</p>
+                    ) : (
+                      <table className="file-table">
+                        <thead>
+                          <tr>
+                            <th>Name</th>
+                            <th>Size</th>
+                            <th>Progress</th>
+                            <th>Downloaded</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {fileInfo.map((file, idx) => (
+                            <tr key={idx}>
+                              <td className="file-path" title={file.path}>
+                                {file.path}
+                              </td>
+                              <td>{formatBytes(file.size)}</td>
+                              <td>
+                                <div className="file-progress">
+                                  <div
+                                    className="file-progress-bar"
+                                    style={{ width: `${file.progress}%` }}
+                                  />
+                                  <span className="file-progress-text">
+                                    {file.progress.toFixed(1)}%
+                                  </span>
+                                </div>
+                              </td>
+                              <td>{formatBytes(file.downloaded)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
                   </div>
                 )}
               </div>
@@ -1167,11 +1335,11 @@ function App() {
         <div className="status-section">
           <span className="status-item">
             <Icons.Download />
-            <span>{formatSpeed(globalStats.totalDownload)}</span>
+            <span>{formatSpeed(globalStatsData?.download_rate ?? globalStats.totalDownload)}</span>
           </span>
           <span className="status-item">
             <Icons.Upload />
-            <span>{formatSpeed(globalStats.totalUpload)}</span>
+            <span>{formatSpeed(globalStatsData?.upload_rate ?? globalStats.totalUpload)}</span>
           </span>
         </div>
         <div className="status-section">
@@ -1186,6 +1354,10 @@ function App() {
           </span>
         </div>
         <div className="status-section">
+          <span className="status-item">
+            <Icons.Peers />
+            <span>Peers: {globalStatsData?.total_peers ?? 0}</span>
+          </span>
           <span className="status-item connection">
             <span className="connection-dot connected" />
             DHT: Ready
@@ -1240,6 +1412,8 @@ function App() {
                         <>
                           <h4>{pendingTorrents[selectedPendingIndex].info.name}</h4>
                           <div className="preview-grid">
+                            <span>Info Hash:</span>
+                            <span className="monospace">{pendingTorrents[selectedPendingIndex].info.info_hash}</span>
                             <span>Size:</span>
                             <span>{formatBytes(pendingTorrents[selectedPendingIndex].info.total_size)}</span>
                             <span>Files:</span>
@@ -1252,6 +1426,18 @@ function App() {
                             <span>{pendingTorrents[selectedPendingIndex].info.version}</span>
                             <span>Private:</span>
                             <span>{pendingTorrents[selectedPendingIndex].info.is_private ? "Yes" : "No"}</span>
+                            {pendingTorrents[selectedPendingIndex].info.created_by && (
+                              <>
+                                <span>Created By:</span>
+                                <span>{pendingTorrents[selectedPendingIndex].info.created_by}</span>
+                              </>
+                            )}
+                            {pendingTorrents[selectedPendingIndex].info.creation_date && (
+                              <>
+                                <span>Created:</span>
+                                <span>{formatDate(pendingTorrents[selectedPendingIndex].info.creation_date)}</span>
+                              </>
+                            )}
                             {pendingTorrents[selectedPendingIndex].info.comment && (
                               <>
                                 <span>Comment:</span>
@@ -1259,6 +1445,16 @@ function App() {
                               </>
                             )}
                           </div>
+                          {pendingTorrents[selectedPendingIndex].info.trackers.length > 0 && (
+                            <details className="preview-trackers">
+                              <summary>Trackers ({pendingTorrents[selectedPendingIndex].info.trackers.length})</summary>
+                              <ul>
+                                {pendingTorrents[selectedPendingIndex].info.trackers.map((tracker, i) => (
+                                  <li key={i} className="tracker-item">{tracker}</li>
+                                ))}
+                              </ul>
+                            </details>
+                          )}
 
                           {pendingTorrents[selectedPendingIndex].info.files.length > 0 && (
                             <details className="preview-files">

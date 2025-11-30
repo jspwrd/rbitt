@@ -212,6 +212,14 @@ pub struct GlobalStats {
     pub global_connections: usize,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TorrentFileInfo {
+    pub path: String,
+    pub size: u64,
+    pub progress: f64,
+    pub downloaded: u64,
+}
+
 #[tauri::command]
 async fn get_torrent_trackers(
     state: State<'_, AppState>,
@@ -239,6 +247,21 @@ async fn get_torrent_peers(
 
     engine
         .get_torrent_peers(&info_hash)
+        .ok_or_else(|| "Torrent not found".to_string())
+}
+
+#[tauri::command]
+async fn get_torrent_files(
+    state: State<'_, AppState>,
+    info_hash: String,
+) -> Result<Vec<TorrentFileInfo>, String> {
+    let guard = state.engine.read().await;
+    let engine = guard
+        .as_ref()
+        .ok_or_else(|| "Engine not initialized".to_string())?;
+
+    engine
+        .get_torrent_files(&info_hash)
         .ok_or_else(|| "Torrent not found".to_string())
 }
 
@@ -482,6 +505,7 @@ pub fn run() {
             get_torrents,
             get_torrent_trackers,
             get_torrent_peers,
+            get_torrent_files,
             get_global_stats,
             pause_torrent,
             resume_torrent,
