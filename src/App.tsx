@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import "./App.css";
+import { useTheme } from "./hooks";
 
 import {
   Icons,
@@ -79,6 +80,7 @@ function App() {
 
   // UI preferences
   const [useStatusIndicators, setUseStatusIndicators] = useState(false);
+  const { themeMode, setTheme } = useTheme();
 
   // Detail panel data
   const [trackerInfo, setTrackerInfo] = useState<TrackerStatusInfo[]>([]);
@@ -642,6 +644,8 @@ function App() {
           onApplyQueueSettings={applyQueueSettings}
           useStatusIndicators={useStatusIndicators}
           onUseStatusIndicatorsChange={setUseStatusIndicators}
+          themeMode={themeMode}
+          onThemeModeChange={setTheme}
           onClose={() => setShowSettings(false)}
           onError={setError}
         />

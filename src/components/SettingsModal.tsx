@@ -8,6 +8,7 @@ import type {
   AutoTrackerSettingsInfo,
   MoveOnCompleteSettingsInfo,
   ExternalProgramSettingsInfo,
+  ThemeMode,
 } from "../types";
 
 interface SettingsModalProps {
@@ -32,6 +33,8 @@ interface SettingsModalProps {
   onApplyQueueSettings: () => void;
   useStatusIndicators: boolean;
   onUseStatusIndicatorsChange: (enabled: boolean) => void;
+  themeMode: ThemeMode;
+  onThemeModeChange: (mode: ThemeMode) => void;
   onClose: () => void;
   onError: (error: string) => void;
 }
@@ -60,6 +63,8 @@ export function SettingsModal({
   onApplyQueueSettings,
   useStatusIndicators,
   onUseStatusIndicatorsChange,
+  themeMode,
+  onThemeModeChange,
   onClose,
   onError,
 }: SettingsModalProps) {
@@ -316,6 +321,32 @@ export function SettingsModal({
 
                 <div className="settings-section">
                   <h3>Appearance</h3>
+                  <div className="setting-row">
+                    <label>Theme</label>
+                    <div className="theme-selector">
+                      <button
+                        className={`theme-option ${themeMode === "light" ? "active" : ""}`}
+                        onClick={() => onThemeModeChange("light")}
+                      >
+                        <Icons.Sun />
+                        <span>Light</span>
+                      </button>
+                      <button
+                        className={`theme-option ${themeMode === "dark" ? "active" : ""}`}
+                        onClick={() => onThemeModeChange("dark")}
+                      >
+                        <Icons.Moon />
+                        <span>Dark</span>
+                      </button>
+                      <button
+                        className={`theme-option ${themeMode === "system" ? "active" : ""}`}
+                        onClick={() => onThemeModeChange("system")}
+                      >
+                        <Icons.Monitor />
+                        <span>System</span>
+                      </button>
+                    </div>
+                  </div>
                   <div className="setting-row checkbox-row">
                     <label className="checkbox-label">
                       <input

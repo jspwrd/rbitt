@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "rbitt",
+  "productName": "RBitt",
   "version": "0.1.0",
   "identifier": "com.jasper.rbitt",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "RBitt - BitTorrent Client",
+        "title": "RBitt",
         "width": 1200,
         "height": 800,
         "minWidth": 900,
@@ -28,10 +28,43 @@
     "targets": "all",
     "icon": [
       "icons/32x32.png",
+      "icons/64x64.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "category": "Utility",
+    "shortDescription": "A modern BitTorrent client",
+    "longDescription": "RBitt is a fast, lightweight BitTorrent client built with Rust. It supports BitTorrent v1, v2, and hybrid torrents with DHT, PEX, and magnet link support.",
+    "copyright": "Copyright (c) 2024 Jasper",
+    "fileAssociations": [
+      {
+        "ext": ["torrent"],
+        "mimeType": "application/x-bittorrent",
+        "name": "BitTorrent File",
+        "description": "BitTorrent metainfo file",
+        "role": "Editor"
+      }
+    ],
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "hardenedRuntime": true,
+      "entitlements": "entitlements.plist",
+      "dmg": {
+        "windowSize": {
+          "width": 660,
+          "height": 400
+        },
+        "appPosition": {
+          "x": 180,
+          "y": 170
+        },
+        "applicationFolderPosition": {
+          "x": 480,
+          "y": 170
+        }
+      }
+    }
   }
 }

@@ -1,16 +1,18 @@
 /* RBitt - Modern BitTorrent Client Styles */
 
 :root {
-  /* Dark theme colors */
+  /* Dark theme colors (default) */
   --bg-primary: #1e1e1e;
   --bg-secondary: #252526;
   --bg-tertiary: #2d2d30;
   --bg-hover: #3e3e42;
   --bg-selected: #094771;
+  --bg-input: #3c3c3c;
 
   --text-primary: #cccccc;
   --text-secondary: #858585;
   --text-muted: #5a5a5a;
+  --text-tertiary: #6b7280;
 
   --border-color: #3c3c3c;
   --border-light: #454545;
@@ -33,6 +35,7 @@
   --accent: #0e639c;
   --accent-hover: #1177bb;
   --accent-active: #094771;
+  --accent-color: #0e639c;
 
   --danger: #f14c4c;
   --danger-hover: #d73a49;
@@ -44,6 +47,50 @@
   --toolbar-height: 40px;
   --statusbar-height: 24px;
   --sidebar-width: 180px;
+}
+
+/* Light theme */
+[data-theme="light"] {
+  --bg-primary: #ffffff;
+  --bg-secondary: #f3f3f3;
+  --bg-tertiary: #e8e8e8;
+  --bg-hover: #e0e0e0;
+  --bg-selected: #cce5ff;
+  --bg-input: #ffffff;
+
+  --text-primary: #1f1f1f;
+  --text-secondary: #616161;
+  --text-muted: #9e9e9e;
+  --text-tertiary: #757575;
+
+  --border-color: #d4d4d4;
+  --border-light: #e0e0e0;
+
+  /* State colors - slightly adjusted for light background */
+  --state-downloading: #00897b;
+  --state-seeding: #1976d2;
+  --state-paused: #757575;
+  --state-checking: #e65100;
+  --state-error: #d32f2f;
+  --state-stalled: #f57c00;
+  --state-active: #388e3c;
+  --state-inactive: #9e9e9e;
+  --state-moving: #7b1fa2;
+  --state-completed: #388e3c;
+  --state-metadata: #0097a7;
+  --state-queued: #9e9e9e;
+
+  /* Accent colors */
+  --accent: #0078d4;
+  --accent-hover: #106ebe;
+  --accent-active: #005a9e;
+  --accent-color: #0078d4;
+
+  --danger: #d32f2f;
+  --danger-hover: #c62828;
+
+  --success: #388e3c;
+  --warning: #f57c00;
 }
 
 * {
@@ -2416,4 +2463,48 @@ input:focus-visible {
   gap: 1rem;
   justify-content: center;
   margin-top: 1.5rem;
+}
+
+/* ==================== Theme Selector ==================== */
+.theme-selector {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.theme-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 20px;
+  background: var(--bg-tertiary);
+  border: 2px solid var(--border-color);
+  border-radius: 8px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  min-width: 80px;
+}
+
+.theme-option:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-light);
+  color: var(--text-primary);
+}
+
+.theme-option.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
+.theme-option svg {
+  width: 20px;
+  height: 20px;
+}
+
+.theme-option span {
+  font-size: 12px;
+  font-weight: 500;
 }
