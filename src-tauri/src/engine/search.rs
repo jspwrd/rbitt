@@ -252,7 +252,7 @@ impl SearchEngine {
         // Extract filename from URL or generate one
         let filename = url
             .split('/')
-            .last()
+            .next_back()
             .filter(|s| s.ends_with(".py"))
             .unwrap_or("plugin.py");
 

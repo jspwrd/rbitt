@@ -446,10 +446,9 @@ impl TorrentEngine {
                         if matches!(
                             torrent.state,
                             TorrentState::Seeding | TorrentState::Completed
-                        ) {
-                            if torrent.share_limits_reached() {
-                                actions.push((hash.clone(), torrent.share_limits.limit_action));
-                            }
+                        ) && torrent.share_limits_reached()
+                        {
+                            actions.push((hash.clone(), torrent.share_limits.limit_action));
                         }
                     }
                 }

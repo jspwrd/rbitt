@@ -1124,6 +1124,7 @@ async fn get_rss_feed_items(
 }
 
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn add_rss_rule(
     state: State<'_, AppState>,
     name: String,
