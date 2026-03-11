@@ -81,7 +81,10 @@ impl HttpTracker {
         self.parse_announce_response(&body)
     }
 
-    fn parse_announce_response(&self, data: &[u8]) -> Result<AnnounceResponse, TrackerError> {
+    pub(crate) fn parse_announce_response(
+        &self,
+        data: &[u8],
+    ) -> Result<AnnounceResponse, TrackerError> {
         let value = decode(data)?;
 
         let dict = value
@@ -228,7 +231,10 @@ impl HttpTracker {
         self.parse_scrape_response(&body)
     }
 
-    fn announce_to_scrape_url(&self, announce_url: &str) -> Result<String, TrackerError> {
+    pub(crate) fn announce_to_scrape_url(
+        &self,
+        announce_url: &str,
+    ) -> Result<String, TrackerError> {
         if let Some(pos) = announce_url.rfind("/announce") {
             let mut url = announce_url.to_string();
             url.replace_range(pos..pos + 9, "/scrape");
@@ -240,7 +246,10 @@ impl HttpTracker {
         }
     }
 
-    fn parse_scrape_response(&self, data: &[u8]) -> Result<ScrapeResponse, TrackerError> {
+    pub(crate) fn parse_scrape_response(
+        &self,
+        data: &[u8],
+    ) -> Result<ScrapeResponse, TrackerError> {
         let value = decode(data)?;
 
         let dict = value

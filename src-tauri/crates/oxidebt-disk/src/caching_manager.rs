@@ -58,6 +58,7 @@ impl CachingDiskManager {
         &self.storage
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn write_block(
         &self,
         info_hash: &str,

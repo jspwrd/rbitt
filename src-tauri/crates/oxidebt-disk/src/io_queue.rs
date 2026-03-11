@@ -114,7 +114,7 @@ impl IoQueue {
     }
 
     async fn dispatch_batch(&self, batch: &mut Vec<WriteOp>, num_workers: usize) {
-        batch.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
+        batch.sort_by_key(|a| a.sort_key());
 
         let mut per_worker: Vec<Vec<WriteOp>> = (0..num_workers).map(|_| Vec::new()).collect();
 

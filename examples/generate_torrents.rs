@@ -81,7 +81,7 @@ fn generate_v1_single_file(dir: &Path) {
 fn generate_v1_multi_file(dir: &Path) {
     let piece_length: i64 = 16384;
 
-    let files = vec![
+    let files = [
         (b"file1.txt".to_vec(), 512i64),
         (b"file2.txt".to_vec(), 768i64),
         (b"subdir/file3.txt".to_vec(), 256i64),

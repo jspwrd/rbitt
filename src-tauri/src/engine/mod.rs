@@ -357,61 +357,63 @@ impl TorrentEngine {
                             }
 
                             match response.bytes().await {
-                            Ok(data) => {
-                                // Also check after download in case content-length was missing
-                                if data.len() as u64 > MAX_TORRENT_FILE_SIZE {
-                                    tracing::warn!(
+                                Ok(data) => {
+                                    // Also check after download in case content-length was missing
+                                    if data.len() as u64 > MAX_TORRENT_FILE_SIZE {
+                                        tracing::warn!(
                                         "RSS: Downloaded torrent file too large ({} bytes, max {}): {}",
                                         data.len(),
                                         MAX_TORRENT_FILE_SIZE,
                                         torrent_url
                                     );
-                                    continue;
-                                }
+                                        continue;
+                                    }
 
-                                match oxidebt_torrent::Metainfo::from_bytes(&data) {
-                                    Ok(meta) => {
-                                        let hash = match &meta.info_hash {
-                                            oxidebt_torrent::InfoHash::V1(h) => h.to_hex(),
-                                            oxidebt_torrent::InfoHash::V2(h) => h.to_hex(),
-                                            oxidebt_torrent::InfoHash::Hybrid { v1, .. } => v1.to_hex(),
-                                        };
+                                    match oxidebt_torrent::Metainfo::from_bytes(&data) {
+                                        Ok(meta) => {
+                                            let hash = match &meta.info_hash {
+                                                oxidebt_torrent::InfoHash::V1(h) => h.to_hex(),
+                                                oxidebt_torrent::InfoHash::V2(h) => h.to_hex(),
+                                                oxidebt_torrent::InfoHash::Hybrid {
+                                                    v1, ..
+                                                } => v1.to_hex(),
+                                            };
 
-                                        tracing::info!(
-                                            "RSS: Adding torrent '{}' ({})",
-                                            meta.info.name,
-                                            hash
-                                        );
+                                            tracing::info!(
+                                                "RSS: Adding torrent '{}' ({})",
+                                                meta.info.name,
+                                                hash
+                                            );
 
-                                        let mut managed =
-                                            ManagedTorrent::with_save_path(meta, save_path);
-                                        managed.category = event.category;
-                                        managed.tags = event.tags.into_iter().collect();
-                                        managed.share_limits = default_limits.read().clone();
+                                            let mut managed =
+                                                ManagedTorrent::with_save_path(meta, save_path);
+                                            managed.category = event.category;
+                                            managed.tags = event.tags.into_iter().collect();
+                                            managed.share_limits = default_limits.read().clone();
 
-                                        if event.add_paused {
-                                            managed.state = TorrentState::Paused;
+                                            if event.add_paused {
+                                                managed.state = TorrentState::Paused;
+                                            }
+
+                                            torrents.write().insert(hash, managed);
                                         }
-
-                                        torrents.write().insert(hash, managed);
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            "RSS: Failed to parse torrent from {}: {}",
-                                            torrent_url,
-                                            e
-                                        );
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "RSS: Failed to parse torrent from {}: {}",
+                                                torrent_url,
+                                                e
+                                            );
+                                        }
                                     }
                                 }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "RSS: Failed to read torrent from {}: {}",
+                                        torrent_url,
+                                        e
+                                    );
+                                }
                             }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "RSS: Failed to read torrent from {}: {}",
-                                    torrent_url,
-                                    e
-                                );
-                            }
-                        }
                         }
                         Err(e) => {
                             tracing::warn!(
@@ -444,10 +446,9 @@ impl TorrentEngine {
                         if matches!(
                             torrent.state,
                             TorrentState::Seeding | TorrentState::Completed
-                        ) {
-                            if torrent.share_limits_reached() {
-                                actions.push((hash.clone(), torrent.share_limits.limit_action));
-                            }
+                        ) && torrent.share_limits_reached()
+                        {
+                            actions.push((hash.clone(), torrent.share_limits.limit_action));
                         }
                     }
                 }

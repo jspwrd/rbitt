@@ -276,9 +276,7 @@ impl ManagedTorrent {
 
     /// Check if any files are set to skip
     pub fn has_skipped_files(&self) -> bool {
-        self.file_priorities
-            .iter()
-            .any(|p| *p == FilePriority::Skip)
+        self.file_priorities.contains(&FilePriority::Skip)
     }
 
     pub fn info_hash_hex(&self) -> String {

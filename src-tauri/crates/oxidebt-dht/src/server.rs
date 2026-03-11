@@ -538,8 +538,8 @@ impl DhtServer {
             id[byte_idx] = (id[byte_idx] & keep_mask) | (random_byte & random_mask);
         }
 
-        for i in (byte_idx + 1)..20 {
-            id[i] = rand::random();
+        for byte in id.iter_mut().skip(byte_idx + 1) {
+            *byte = rand::random();
         }
 
         NodeId(id)
@@ -685,12 +685,12 @@ impl DhtServer {
         let secrets = self.token_secrets.read();
 
         let current_token = self.generate_token_with_secret(addr, &secrets.current);
-        if &current_token == token {
+        if current_token == token {
             return true;
         }
 
         let previous_token = self.generate_token_with_secret(addr, &secrets.previous);
-        &previous_token == token
+        previous_token == token
     }
 
     pub fn rotate_token_secret(&self) {

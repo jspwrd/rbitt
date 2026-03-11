@@ -222,10 +222,8 @@ impl PieceCache {
             if t1_len < self.capacity {
                 self.b1.write().pop_front();
                 self.replace(&key, false);
-            } else {
-                if let Some((_, _, size)) = self.t1.write().pop_front() {
-                    self.memory_used.fetch_sub(size, Ordering::Relaxed);
-                }
+            } else if let Some((_, _, size)) = self.t1.write().pop_front() {
+                self.memory_used.fetch_sub(size, Ordering::Relaxed);
             }
         } else {
             let total = t1_len + b1_len + self.t2.read().len() + self.b2.read().len();

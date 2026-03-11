@@ -716,3 +716,316 @@ fn stress_test_piece_manager_progressive_verification() {
     assert_eq!(pm.verified_count(), 100);
     assert!(pm.is_verification_complete());
 }
+
+// ========================
+// Extension Handshake tests
+// ========================
+
+#[test]
+fn test_extension_handshake_encode_decode() {
+    let hs = ExtensionHandshake::new()
+        .with_metadata_size(12345)
+        .with_listen_port(6881);
+
+    let encoded = hs.encode();
+    let parsed = ExtensionHandshake::parse(&encoded).unwrap();
+
+    assert_eq!(parsed.metadata_size, Some(12345));
+    assert_eq!(parsed.listen_port, Some(6881));
+    assert_eq!(parsed.client, Some("oxidebt/0.1.0".to_string()));
+    assert!(parsed.ut_metadata.is_some());
+    assert!(parsed.ut_pex.is_some());
+    assert_eq!(parsed.reqq, Some(250));
+}
+
+#[test]
+fn test_extension_handshake_default() {
+    let hs = ExtensionHandshake::default();
+    assert_eq!(hs.metadata_size, None);
+    assert_eq!(hs.listen_port, None);
+    assert!(hs.ut_metadata.is_some());
+    assert!(hs.ut_pex.is_some());
+}
+
+#[test]
+fn test_extension_handshake_parse_empty() {
+    let result = ExtensionHandshake::parse(b"");
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_extension_handshake_parse_invalid() {
+    let result = ExtensionHandshake::parse(b"not bencode");
+    assert!(result.is_none());
+}
+
+// ========================
+// MetadataMessage tests
+// ========================
+
+#[test]
+fn test_metadata_request_encode_decode() {
+    let msg = extension::MetadataMessage::Request { piece: 5 };
+    let encoded = msg.encode();
+    let parsed = extension::MetadataMessage::parse(&encoded).unwrap();
+
+    match parsed {
+        extension::MetadataMessage::Request { piece } => assert_eq!(piece, 5),
+        _ => panic!("wrong message type"),
+    }
+}
+
+#[test]
+fn test_metadata_data_encode_decode() {
+    let data = Bytes::from(vec![0xAB; 1024]);
+    let msg = extension::MetadataMessage::Data {
+        piece: 3,
+        total_size: 16384,
+        data: data.clone(),
+    };
+    let encoded = msg.encode();
+    let parsed = extension::MetadataMessage::parse(&encoded).unwrap();
+
+    match parsed {
+        extension::MetadataMessage::Data {
+            piece,
+            total_size,
+            data: parsed_data,
+        } => {
+            assert_eq!(piece, 3);
+            assert_eq!(total_size, 16384);
+            assert_eq!(parsed_data, data);
+        }
+        _ => panic!("wrong message type"),
+    }
+}
+
+#[test]
+fn test_metadata_reject_encode_decode() {
+    let msg = extension::MetadataMessage::Reject { piece: 7 };
+    let encoded = msg.encode();
+    let parsed = extension::MetadataMessage::parse(&encoded).unwrap();
+
+    match parsed {
+        extension::MetadataMessage::Reject { piece } => assert_eq!(piece, 7),
+        _ => panic!("wrong message type"),
+    }
+}
+
+#[test]
+fn test_metadata_message_parse_invalid() {
+    let result = extension::MetadataMessage::parse(b"");
+    assert!(result.is_none());
+
+    let result = extension::MetadataMessage::parse(b"not bencode");
+    assert!(result.is_none());
+}
+
+// ========================
+// PEX Message (extension module) tests
+// ========================
+
+#[test]
+fn test_extension_pex_encode_decode() {
+    let mut msg = extension::PexMessage::new();
+    msg.added.push(extension::PexPeer {
+        ip: std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 1)),
+        port: 6881,
+    });
+    msg.added_flags.push(0x01); // encryption
+
+    msg.added6.push(extension::PexPeer {
+        ip: std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST),
+        port: 6882,
+    });
+
+    let encoded = msg.encode();
+    let parsed = extension::PexMessage::parse(&encoded).unwrap();
+
+    assert_eq!(parsed.added.len(), 1);
+    assert_eq!(parsed.added[0].port, 6881);
+    assert_eq!(parsed.added_flags.len(), 1);
+    assert_eq!(parsed.added_flags[0], 0x01);
+    assert_eq!(parsed.added6.len(), 1);
+    assert_eq!(parsed.added6[0].port, 6882);
+}
+
+#[test]
+fn test_extension_pex_with_dropped() {
+    let mut msg = extension::PexMessage::new();
+    msg.dropped.push(extension::PexPeer {
+        ip: std::net::IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 1)),
+        port: 51413,
+    });
+    msg.dropped6.push(extension::PexPeer {
+        ip: std::net::IpAddr::V6(std::net::Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)),
+        port: 6881,
+    });
+
+    let encoded = msg.encode();
+    let parsed = extension::PexMessage::parse(&encoded).unwrap();
+
+    assert_eq!(parsed.dropped.len(), 1);
+    assert_eq!(parsed.dropped[0].port, 51413);
+    assert_eq!(parsed.dropped6.len(), 1);
+    assert_eq!(parsed.dropped6[0].port, 6881);
+}
+
+#[test]
+fn test_extension_pex_parse_empty() {
+    let result = extension::PexMessage::parse(b"");
+    assert!(result.is_none());
+}
+
+// ========================
+// Handshake tests
+// ========================
+
+#[test]
+fn test_handshake_supports_extensions() {
+    let mut hs = Handshake::new([0xAB; 20], [0xCD; 20]);
+    // BEP-10: bit 20 (0x00100000 in reserved)
+    hs.reserved[5] |= 0x10;
+    assert!(hs.supports_extensions());
+}
+
+#[test]
+fn test_handshake_supports_dht() {
+    let mut hs = Handshake::new([0xAB; 20], [0xCD; 20]);
+    // BEP-5: bit 0
+    hs.reserved[7] |= 0x01;
+    assert!(hs.supports_dht());
+}
+
+#[test]
+fn test_handshake_supports_fast() {
+    let mut hs = Handshake::new([0xAB; 20], [0xCD; 20]);
+    // BEP-6: bit 2
+    hs.reserved[7] |= 0x04;
+    assert!(hs.supports_fast());
+}
+
+// ========================
+// Bitfield edge cases
+// ========================
+
+#[test]
+fn test_bitfield_clear_piece() {
+    let mut bf = Bitfield::new(100);
+    bf.set_piece(50);
+    assert!(bf.has_piece(50));
+
+    bf.clear_piece(50);
+    assert!(!bf.has_piece(50));
+}
+
+#[test]
+fn test_bitfield_from_bytes_spare_bits() {
+    // 10 pieces = 2 bytes, but only 10 bits are valid
+    let bytes = [0xFF, 0xC0]; // 11111111 11000000 - all 10 pieces set
+    let bf = Bitfield::from_bytes(&bytes, 10).unwrap();
+    assert_eq!(bf.count(), 10);
+    assert!(bf.is_complete());
+}
+
+#[test]
+fn test_bitfield_from_bytes_spare_bits_ignored() {
+    // 10 pieces = need 2 bytes, spare bits should be 0 per spec
+    // but the implementation tolerates set spare bits (lenient parsing)
+    let bytes = [0xFF, 0xFF]; // Spare bits are set
+    let result = Bitfield::from_bytes(&bytes, 10);
+    assert!(result.is_ok());
+    // Only the first 10 bits count as pieces
+    let bf = result.unwrap();
+    assert_eq!(bf.count(), 10);
+}
+
+#[test]
+fn test_bitfield_missing_pieces() {
+    let mut our = Bitfield::new(10);
+    our.set_piece(0);
+    our.set_piece(1);
+
+    let mut peer = Bitfield::new(10);
+    peer.set_piece(1);
+    peer.set_piece(2);
+    peer.set_piece(3);
+
+    let missing = peer.missing_pieces(&our);
+    // Pieces peer has that we don't
+    assert!(missing.contains(&2));
+    assert!(missing.contains(&3));
+    assert!(!missing.contains(&1)); // We already have this
+}
+
+#[test]
+fn test_bitfield_to_bytes() {
+    let mut bf = Bitfield::new(16);
+    bf.set_piece(0);
+    bf.set_piece(8);
+
+    let bytes = bf.to_bytes();
+    assert_eq!(bytes.len(), 2);
+}
+
+// ========================
+// PeerId additional tests
+// ========================
+
+#[test]
+fn test_peer_id_from_bytes() {
+    let bytes = [0xAB; 20];
+    let id = PeerId::from_bytes(&bytes).unwrap();
+    assert_eq!(id.0, bytes);
+}
+
+#[test]
+fn test_peer_id_from_bytes_wrong_length() {
+    assert!(PeerId::from_bytes(&[0u8; 10]).is_none());
+}
+
+#[test]
+fn test_peer_id_as_bytes() {
+    let id = PeerId::generate();
+    let bytes = id.as_bytes();
+    assert_eq!(bytes.len(), 20);
+}
+
+// ========================
+// FastExtensionState tests
+// ========================
+
+#[test]
+fn test_fast_extension_state_init() {
+    let mut state = FastExtensionState::new();
+    let info_hash = [0xAB; 20];
+    state.init_for_peer(
+        std::net::IpAddr::V4(std::net::Ipv4Addr::new(192, 168, 1, 1)),
+        &info_hash,
+        1000,
+    );
+
+    let allowed = state.get_outgoing_allowed_fast();
+    assert!(!allowed.is_empty());
+}
+
+#[test]
+fn test_fast_extension_can_request_while_choked() {
+    let mut state = FastExtensionState::new();
+
+    // Add incoming allowed fast piece
+    state.add_incoming_allowed_fast(42);
+    assert!(state.can_request_while_choked(42));
+    assert!(!state.can_request_while_choked(43));
+}
+
+#[test]
+fn test_fast_extension_suggestions() {
+    let mut state = FastExtensionState::new();
+    state.add_suggestion(10);
+    state.add_suggestion(20);
+
+    state.clear_suggestions();
+    // After clearing, no suggestions should remain
+    // (suggestions are kept in a separate vec, clearing removes them)
+}

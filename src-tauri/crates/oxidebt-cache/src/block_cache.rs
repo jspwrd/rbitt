@@ -68,7 +68,7 @@ impl PieceBlocks {
 
     fn assemble(&self) -> Bytes {
         let mut data = Vec::with_capacity(self.piece_length as usize);
-        for (_, block) in &self.blocks {
+        for block in self.blocks.values() {
             data.extend_from_slice(block);
         }
         Bytes::from(data)

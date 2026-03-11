@@ -324,4 +324,124 @@ mod tests {
             rate1
         );
     }
+
+    #[test]
+    fn test_rate_calculator_reset() {
+        let mut calc = RateCalculator::new();
+        let start = Instant::now();
+
+        calc.update(1_000_000, start);
+        assert!(calc.rate() > 0.0);
+
+        calc.reset();
+        assert_eq!(calc.rate(), 0.0);
+        assert_eq!(calc.instant_rate(), 0.0);
+    }
+
+    #[test]
+    fn test_rate_calculator_set_baseline() {
+        let mut calc = RateCalculator::new();
+        let start = Instant::now();
+
+        // Transfer some data
+        calc.update(500_000, start);
+        assert!(calc.rate() > 0.0);
+
+        // Set baseline - should reset rate but keep the total
+        calc.set_baseline(1_000_000);
+        assert_eq!(calc.rate(), 0.0);
+
+        // Further updates should only count new bytes above baseline
+        calc.update(1_100_000, start + Duration::from_millis(100));
+        // Only 100K new bytes
+        assert!(calc.rate() > 0.0);
+    }
+
+    #[test]
+    fn test_rate_calculator_zero_bytes() {
+        let mut calc = RateCalculator::new();
+        let start = Instant::now();
+
+        // Update with no data transfer
+        calc.update(0, start);
+        calc.update(0, start + Duration::from_millis(100));
+        assert_eq!(calc.rate(), 0.0);
+    }
+
+    #[test]
+    fn test_rate_calculator_burst_then_steady() {
+        let mut calc = RateCalculator::new();
+        let start = Instant::now();
+
+        // Initial burst
+        calc.update(1_000_000, start);
+
+        // Steady transfer at 100KB per 100ms = 1MB/s
+        for i in 1..20 {
+            calc.update(
+                1_000_000 + i * 100_000,
+                start + Duration::from_millis(i * 100),
+            );
+        }
+
+        let rate = calc.rate();
+        // Should converge toward 1MB/s
+        assert!(rate > 500_000.0 && rate < 3_000_000.0, "Rate was {}", rate);
+    }
+
+    // ========================
+    // TorrentStats tests
+    // ========================
+
+    #[test]
+    fn test_torrent_stats_new() {
+        let stats = TorrentStats::new();
+        assert_eq!(stats.downloaded, 0);
+        assert_eq!(stats.uploaded, 0);
+        assert_eq!(stats.download_rate, 0.0);
+        assert_eq!(stats.upload_rate, 0.0);
+    }
+
+    #[test]
+    fn test_torrent_stats_record_download() {
+        let mut stats = TorrentStats::new();
+        stats.record_download(1_000_000);
+        assert_eq!(stats.downloaded, 1_000_000);
+        // Rate should be initialized
+        assert!(stats.download_rate >= 0.0);
+    }
+
+    #[test]
+    fn test_torrent_stats_record_upload() {
+        let mut stats = TorrentStats::new();
+        stats.record_upload(500_000);
+        assert_eq!(stats.uploaded, 500_000);
+        assert!(stats.upload_rate >= 0.0);
+    }
+
+    #[test]
+    fn test_torrent_stats_set_downloaded_baseline() {
+        let mut stats = TorrentStats::new();
+        stats.set_downloaded_baseline(10_000_000);
+        assert_eq!(stats.downloaded, 10_000_000);
+        assert_eq!(stats.download_rate, 0.0);
+    }
+
+    #[test]
+    fn test_torrent_stats_update_rates() {
+        let mut stats = TorrentStats::new();
+        stats.downloaded = 1_000_000;
+        stats.uploaded = 500_000;
+        stats.update_rates();
+        // Rates are computed from RateCalculator
+        assert!(stats.download_rate >= 0.0);
+        assert!(stats.upload_rate >= 0.0);
+    }
+
+    #[test]
+    fn test_torrent_stats_default() {
+        let stats = TorrentStats::default();
+        assert_eq!(stats.downloaded, 0);
+        assert_eq!(stats.uploaded, 0);
+    }
 }

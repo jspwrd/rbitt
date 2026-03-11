@@ -196,7 +196,7 @@ impl UdpTracker {
         Err(TrackerError::Timeout)
     }
 
-    fn parse_announce_response(
+    pub(crate) fn parse_announce_response(
         &self,
         data: &[u8],
         expected_transaction_id: u32,
@@ -279,7 +279,7 @@ impl UdpTracker {
         self.parse_scrape_response(&buf[..n], transaction_id, info_hashes)
     }
 
-    fn parse_scrape_response(
+    pub(crate) fn parse_scrape_response(
         &self,
         data: &[u8],
         expected_transaction_id: u32,
