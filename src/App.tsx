@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import "./App.css";
 import { useTheme } from "./hooks";
+import { checkForUpdates } from "./updater";
 
 import {
   Icons,
@@ -105,6 +106,10 @@ function App() {
       }
     }
     autoInit();
+  }, []);
+
+  useEffect(() => {
+    checkForUpdates();
   }, []);
 
   const refreshTorrents = useCallback(async () => {
