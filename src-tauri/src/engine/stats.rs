@@ -386,11 +386,7 @@ mod tests {
 
         let rate = calc.rate();
         // Should converge toward 1MB/s
-        assert!(
-            rate > 500_000.0 && rate < 3_000_000.0,
-            "Rate was {}",
-            rate
-        );
+        assert!(rate > 500_000.0 && rate < 3_000_000.0, "Rate was {}", rate);
     }
 
     // ========================

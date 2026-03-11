@@ -235,14 +235,7 @@ fn test_block_cache_finalize_and_verify_v2() {
 #[test]
 fn test_block_cache_finalize_wrong_hash() {
     let cache = BlockCache::new(1024 * 1024);
-    cache.add_block(
-        "hash1",
-        0,
-        0,
-        Bytes::from(vec![0xAB; 16384]),
-        16384,
-        1,
-    );
+    cache.add_block("hash1", 0, 0, Bytes::from(vec![0xAB; 16384]), 16384, 1);
 
     let wrong_hash = vec![0u8; 20];
     assert!(!cache.finalize_and_verify("hash1", 0, &wrong_hash));
@@ -270,14 +263,7 @@ fn test_block_cache_finalize_multiblock_v1() {
 
     // Add blocks in order so streaming hash can advance
     cache.add_block("hash1", 0, 0, Bytes::from(block1), piece_length, 1);
-    cache.add_block(
-        "hash1",
-        0,
-        16384,
-        Bytes::from(block2),
-        piece_length,
-        1,
-    );
+    cache.add_block("hash1", 0, 16384, Bytes::from(block2), piece_length, 1);
 
     assert!(cache.finalize_and_verify("hash1", 0, &expected_hash));
 }

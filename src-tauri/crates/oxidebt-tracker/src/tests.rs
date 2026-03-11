@@ -104,18 +104,9 @@ fn test_http_parse_announce_compact() {
     let tracker = HttpTracker::new();
 
     let mut dict = BTreeMap::new();
-    dict.insert(
-        bytes::Bytes::from_static(b"interval"),
-        Value::Integer(1800),
-    );
-    dict.insert(
-        bytes::Bytes::from_static(b"complete"),
-        Value::Integer(42),
-    );
-    dict.insert(
-        bytes::Bytes::from_static(b"incomplete"),
-        Value::Integer(7),
-    );
+    dict.insert(bytes::Bytes::from_static(b"interval"), Value::Integer(1800));
+    dict.insert(bytes::Bytes::from_static(b"complete"), Value::Integer(42));
+    dict.insert(bytes::Bytes::from_static(b"incomplete"), Value::Integer(7));
 
     // Compact IPv4 peers: 127.0.0.1:6881, 10.0.0.1:51413
     let mut peer_data = Vec::new();
@@ -150,17 +141,14 @@ fn test_http_parse_announce_dict_peers() {
     let tracker = HttpTracker::new();
 
     let mut dict = BTreeMap::new();
-    dict.insert(
-        bytes::Bytes::from_static(b"interval"),
-        Value::Integer(900),
-    );
+    dict.insert(bytes::Bytes::from_static(b"interval"), Value::Integer(900));
 
     let mut peer_dict = BTreeMap::new();
-    peer_dict.insert(bytes::Bytes::from_static(b"ip"), Value::string("192.168.1.1"));
     peer_dict.insert(
-        bytes::Bytes::from_static(b"port"),
-        Value::Integer(6881),
+        bytes::Bytes::from_static(b"ip"),
+        Value::string("192.168.1.1"),
     );
+    peer_dict.insert(bytes::Bytes::from_static(b"port"), Value::Integer(6881));
 
     let peer_id = vec![0xAB; 20];
     peer_dict.insert(
@@ -214,10 +202,7 @@ fn test_http_parse_announce_with_warning() {
     let tracker = HttpTracker::new();
 
     let mut dict = BTreeMap::new();
-    dict.insert(
-        bytes::Bytes::from_static(b"interval"),
-        Value::Integer(1800),
-    );
+    dict.insert(bytes::Bytes::from_static(b"interval"), Value::Integer(1800));
     dict.insert(
         bytes::Bytes::from_static(b"warning message"),
         Value::string("slow down"),
@@ -233,10 +218,7 @@ fn test_http_parse_announce_with_tracker_id() {
     let tracker = HttpTracker::new();
 
     let mut dict = BTreeMap::new();
-    dict.insert(
-        bytes::Bytes::from_static(b"interval"),
-        Value::Integer(1800),
-    );
+    dict.insert(bytes::Bytes::from_static(b"interval"), Value::Integer(1800));
     dict.insert(
         bytes::Bytes::from_static(b"tracker id"),
         Value::string("abc123"),
@@ -252,10 +234,7 @@ fn test_http_parse_announce_with_min_interval() {
     let tracker = HttpTracker::new();
 
     let mut dict = BTreeMap::new();
-    dict.insert(
-        bytes::Bytes::from_static(b"interval"),
-        Value::Integer(1800),
-    );
+    dict.insert(bytes::Bytes::from_static(b"interval"), Value::Integer(1800));
     dict.insert(
         bytes::Bytes::from_static(b"min interval"),
         Value::Integer(60),
@@ -288,10 +267,7 @@ fn test_http_parse_announce_with_peers6() {
     let tracker = HttpTracker::new();
 
     let mut dict = BTreeMap::new();
-    dict.insert(
-        bytes::Bytes::from_static(b"interval"),
-        Value::Integer(1800),
-    );
+    dict.insert(bytes::Bytes::from_static(b"interval"), Value::Integer(1800));
 
     // Compact IPv6: ::1 port 6881
     let mut peer6_data = vec![0u8; 16];
@@ -319,24 +295,15 @@ fn test_http_parse_scrape_response() {
 
     let info_hash = [0xAB; 20];
     let mut stats = BTreeMap::new();
-    stats.insert(
-        bytes::Bytes::from_static(b"complete"),
-        Value::Integer(100),
-    );
-    stats.insert(
-        bytes::Bytes::from_static(b"incomplete"),
-        Value::Integer(50),
-    );
+    stats.insert(bytes::Bytes::from_static(b"complete"), Value::Integer(100));
+    stats.insert(bytes::Bytes::from_static(b"incomplete"), Value::Integer(50));
     stats.insert(
         bytes::Bytes::from_static(b"downloaded"),
         Value::Integer(1000),
     );
 
     let mut files = BTreeMap::new();
-    files.insert(
-        bytes::Bytes::from(info_hash.to_vec()),
-        Value::Dict(stats),
-    );
+    files.insert(bytes::Bytes::from(info_hash.to_vec()), Value::Dict(stats));
 
     let mut dict = BTreeMap::new();
     dict.insert(bytes::Bytes::from_static(b"files"), Value::Dict(files));
@@ -410,7 +377,7 @@ fn test_udp_parse_announce_response() {
     buf.put_u32(1800); // interval
     buf.put_u32(5); // leechers (incomplete)
     buf.put_u32(10); // seeders (complete)
-    // Compact peers
+                     // Compact peers
     buf.put_slice(&[127, 0, 0, 1, 0x1A, 0xE1]); // 127.0.0.1:6881
     buf.put_slice(&[10, 0, 0, 1, 0xC8, 0xD5]); // 10.0.0.1:51413
 

@@ -24,39 +24,30 @@ fn validate_plugin_filename(filename: &str) -> Result<(), String> {
 
     // Check for path separators (both Unix and Windows)
     if filename.contains('/') || filename.contains('\\') {
-        return Err(format!(
-            "Filename contains path separators: {}",
-            filename
-        ));
+        return Err(format!("Filename contains path separators: {}", filename));
     }
 
     // Check for parent directory references
     if filename == ".." || filename.starts_with("..") {
-        return Err(format!(
-            "Filename contains path traversal: {}",
-            filename
-        ));
+        return Err(format!("Filename contains path traversal: {}", filename));
     }
 
     // Check for hidden files (starting with .)
     if filename.starts_with('.') {
-        return Err(format!(
-            "Hidden files not allowed: {}",
-            filename
-        ));
+        return Err(format!("Hidden files not allowed: {}", filename));
     }
 
     // Must have .py extension
     if !filename.ends_with(".py") {
-        return Err(format!(
-            "Plugin must have .py extension: {}",
-            filename
-        ));
+        return Err(format!("Plugin must have .py extension: {}", filename));
     }
 
     // Only allow alphanumeric, underscore, hyphen, and .py extension
     let name_without_ext = &filename[..filename.len() - 3];
-    if !name_without_ext.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+    if !name_without_ext
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+    {
         return Err(format!(
             "Filename contains invalid characters: {}",
             filename
