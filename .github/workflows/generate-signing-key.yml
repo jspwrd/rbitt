@@ -1,0 +1,36 @@
+name: Generate Signing Key
+
+on:
+  workflow_dispatch:
+
+jobs:
+  generate:
+    name: Generate Tauri updater signing key
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli --version "^2"
+
+      - name: Generate signing key pair
+        run: |
+          cargo tauri signer generate -w ~/.tauri/rbitt.key
+          echo ""
+          echo "============================================"
+          echo "  SETUP INSTRUCTIONS"
+          echo "============================================"
+          echo ""
+          echo "1. Copy the PRIVATE KEY below and add it as a GitHub repository secret:"
+          echo "   Secret name: TAURI_SIGNING_PRIVATE_KEY"
+          echo ""
+          cat ~/.tauri/rbitt.key
+          echo ""
+          echo ""
+          echo "2. If you set a password, add it as another secret:"
+          echo "   Secret name: TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          echo ""
+          echo "3. Copy the PUBLIC KEY below and paste it into:"
+          echo "   src-tauri/tauri.conf.json -> plugins.updater.pubkey"
+          echo ""
+          cat ~/.tauri/rbitt.key.pub
+          echo ""
+          echo "============================================"
