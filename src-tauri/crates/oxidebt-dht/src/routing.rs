@@ -143,7 +143,7 @@ impl RoutingTable {
             }
         }
 
-        nodes.sort_by(|a, b| a.1.cmp(&b.1));
+        nodes.sort_by_key(|a| a.1);
         nodes.truncate(count);
         nodes.into_iter().map(|(n, _)| n).collect()
     }
