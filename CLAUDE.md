@@ -44,6 +44,7 @@ rbitt (Tauri app)
 ├── oxidebt-tracker    # HTTP and UDP tracker clients
 ├── oxidebt-dht        # Kademlia DHT implementation
 ├── oxidebt-disk       # Disk I/O, file storage, piece verification
+│   └── oxidebt-cache      # Block/piece caching layer
 ├── oxidebt-net        # PEX, LSD, UPnP, bandwidth limiting
 └── oxidebt-constants  # Shared protocol constants and tuning parameters
 ```
@@ -73,12 +74,12 @@ Key background tasks started by `TorrentEngine::start_background_tasks()`:
 
 ### Frontend (`src/`)
 
-Minimal React + TypeScript frontend using Tauri's IPC for communication with the Rust backend. Tauri commands are defined in `src-tauri/src/lib.rs`.
+React + TypeScript frontend using Tauri's IPC for communication with the Rust backend. Tauri commands are defined in `src-tauri/src/lib.rs`.
 
 ## Key Constants
 
 Protocol tuning parameters are centralized in `oxidebt-constants/src/lib.rs`. Important ones:
-- `MAX_PEERS_PER_TORRENT`: 100
+- `MAX_PEERS_PER_TORRENT`: 200
 - `MAX_REQUESTS_PER_PEER`: 500 (request pipelining)
 - `BLOCK_SIZE`: 16384 (16KB)
 - `MAX_UNCHOKED_PEERS`: 4
