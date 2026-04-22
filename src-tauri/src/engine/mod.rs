@@ -2460,7 +2460,7 @@ impl TorrentEngine {
             })
             .collect();
 
-        interested_peers.sort_by(|a, b| b.1.cmp(&a.1));
+        interested_peers.sort_by_key(|a| std::cmp::Reverse(a.1));
 
         let mut new_unchoked = HashSet::new();
         for (addr, _) in interested_peers.iter().take(MAX_UNCHOKED_PEERS - 1) {
