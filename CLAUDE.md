@@ -4,15 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build and Development Commands
 
+This project uses **bun** as its package manager (see `bun.lock`). MSRV is **Rust 1.95**; frontend requires **Node 20.19+ or 22.12+** (Vite 8).
+
 ```bash
 # Install frontend dependencies
-npm install
+bun install
 
 # Run in development mode (starts both Vite dev server and Tauri)
-npm run tauri dev
+bun run tauri dev
 
 # Build for production
-npm run tauri build
+bun run tauri build
+
+# Type-check + bundle the frontend only
+bun run build
 
 # Run Rust tests (from src-tauri directory)
 cd src-tauri && cargo test --workspace
