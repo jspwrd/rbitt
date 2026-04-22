@@ -7,7 +7,6 @@ use oxidebt_constants::{
     DHT_ALPHA, DHT_BOOTSTRAP_NODES, DHT_MAX_ITERATIONS, DHT_QUERY_TIMEOUT, MAX_PENDING_DHT_QUERIES,
 };
 use parking_lot::RwLock;
-use rand::Rng;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -662,7 +661,7 @@ impl DhtServer {
     }
 
     fn generate_transaction_id(&self) -> Bytes {
-        let id: [u8; 2] = rand::thread_rng().gen();
+        let id: [u8; 2] = rand::random();
         Bytes::copy_from_slice(&id)
     }
 

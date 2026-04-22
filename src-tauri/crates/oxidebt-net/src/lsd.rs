@@ -35,7 +35,7 @@ pub struct LsdService {
 impl LsdService {
     pub async fn new(port: u16) -> Result<Self, NetError> {
         let mut cookie_bytes = [0u8; LSD_COOKIE_SIZE];
-        rand::Rng::fill(&mut rand::thread_rng(), &mut cookie_bytes);
+        rand::RngExt::fill(&mut rand::rng(), &mut cookie_bytes);
         let cookie = hex::encode(&cookie_bytes);
 
         let socket_v4 = Self::bind_v4().await.ok();

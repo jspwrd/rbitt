@@ -161,7 +161,7 @@ impl ChokingAlgorithm {
             return;
         }
 
-        let idx = rand::random::<usize>() % candidates.len();
+        let idx = rand::random_range(..candidates.len());
         let new_opt = candidates[idx];
 
         self.optimistic_peer = Some(new_opt);

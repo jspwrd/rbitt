@@ -368,7 +368,7 @@ impl PieceManager {
                 .collect();
 
             if !candidates.is_empty() {
-                let mut rng = rand::thread_rng();
+                let mut rng = rand::rng();
                 candidates.shuffle(&mut rng);
                 return candidates.first().copied();
             }
@@ -489,7 +489,7 @@ impl PieceManager {
                 .collect();
 
             if !candidates.is_empty() {
-                let mut rng = rand::thread_rng();
+                let mut rng = rand::rng();
                 candidates.shuffle(&mut rng);
                 return candidates.first().copied();
             }

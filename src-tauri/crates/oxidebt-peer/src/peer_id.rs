@@ -1,5 +1,5 @@
 use oxidebt_constants::CLIENT_PREFIX;
-use rand::Rng;
+use rand::RngExt;
 use std::fmt;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -10,9 +10,9 @@ impl PeerId {
         let mut id = [0u8; 20];
         id[..8].copy_from_slice(CLIENT_PREFIX.as_bytes());
 
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         for byte in &mut id[8..] {
-            *byte = rng.gen();
+            *byte = rng.random();
         }
 
         Self(id)
