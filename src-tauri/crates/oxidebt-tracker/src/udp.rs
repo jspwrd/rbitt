@@ -8,7 +8,6 @@ use oxidebt_constants::{
 };
 use oxidebt_torrent::InfoHashV1;
 use parking_lot::RwLock;
-use rand::Rng;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
@@ -100,7 +99,7 @@ impl UdpTracker {
         // Use cached connection ID if available
         let connection_id = self.get_connection_id(&socket, addr).await?;
 
-        let transaction_id: u32 = rand::thread_rng().gen();
+        let transaction_id: u32 = rand::random();
 
         let mut request = BytesMut::with_capacity(98);
         request.put_i64(connection_id);
@@ -113,7 +112,7 @@ impl UdpTracker {
         request.put_u64(params.uploaded);
         request.put_u32(params.event.as_u32());
         request.put_u32(0); // IP address (0 = use source)
-        request.put_u32(rand::thread_rng().gen()); // Key
+        request.put_u32(rand::random()); // Key
         request.put_i32(-1); // num_want (-1 = default)
         request.put_u16(params.port);
 
@@ -146,7 +145,7 @@ impl UdpTracker {
     /// BEP-15: Connect with exponential backoff retry.
     /// Timeout starts at 15 seconds and doubles each retry: 15, 30, 60, 120...
     async fn connect(&self, socket: &UdpSocket) -> Result<i64, TrackerError> {
-        let transaction_id: u32 = rand::thread_rng().gen();
+        let transaction_id: u32 = rand::random();
 
         let mut request = BytesMut::with_capacity(16);
         request.put_i64(UDP_TRACKER_PROTOCOL_ID);
@@ -258,7 +257,7 @@ impl UdpTracker {
         // Use cached connection ID if available
         let connection_id = self.get_connection_id(&socket, addr).await?;
 
-        let transaction_id: u32 = rand::thread_rng().gen();
+        let transaction_id: u32 = rand::random();
 
         let mut request = BytesMut::with_capacity(16 + info_hashes.len() * 20);
         request.put_i64(connection_id);

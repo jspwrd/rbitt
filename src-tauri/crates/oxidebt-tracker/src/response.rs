@@ -54,8 +54,11 @@ impl Peer {
         let mut peers = Vec::new();
 
         for chunk in data.chunks_exact(18) {
-            let ip_bytes: [u8; 16] = chunk[..16].try_into().unwrap();
-            let ip = Ipv6Addr::from(ip_bytes);
+            let ip = Ipv6Addr::from([
+                chunk[0], chunk[1], chunk[2], chunk[3], chunk[4], chunk[5], chunk[6], chunk[7],
+                chunk[8], chunk[9], chunk[10], chunk[11], chunk[12], chunk[13], chunk[14],
+                chunk[15],
+            ]);
             let port = u16::from_be_bytes([chunk[16], chunk[17]]);
             peers.push(Peer {
                 addr: SocketAddr::new(IpAddr::V6(ip), port),

@@ -6,9 +6,11 @@ RBitt (pronounced "rabbit") is a modern, cross-platform BitTorrent client built 
 
 ### Protocol Support
 - BitTorrent v1 (BEP 3)
-- BitTorrent v2 (BEP 52)
-- Hybrid v1/v2 torrents (BEP 47)
 - Magnet links (BEP 9)
+- Extension protocol (BEP 10) with `ut_metadata`
+- Fast Extension (BEP 6)
+
+> BitTorrent v2 (BEP 52) and hybrid v1/v2 torrents (BEP 47) are planned but not yet implemented.
 
 ### Peer Discovery
 - HTTP(S) trackers with announce and scrape
@@ -25,7 +27,7 @@ RBitt (pronounced "rabbit") is a modern, cross-platform BitTorrent client built 
 ### Storage
 - Sparse file allocation
 - Full preallocation mode
-- SHA-1 (v1) and SHA-256 (v2) piece verification
+- SHA-1 piece verification
 - Multi-file torrent support
 
 ## Architecture
@@ -40,32 +42,35 @@ RBitt is built as a Rust workspace with the following crates:
 | `oxidebt-tracker` | HTTP and UDP tracker clients |
 | `oxidebt-dht` | Kademlia DHT implementation |
 | `oxidebt-disk` | Disk I/O with verification |
+| `oxidebt-cache` | Block/piece caching layer |
 | `oxidebt-net` | PEX, LSD, UPnP, bandwidth limiting |
+| `oxidebt-constants` | Shared protocol constants and tuning parameters |
 | `rbitt` | Tauri application integrating all components |
 
 ## Building
 
 ### Prerequisites
 
-- Rust 1.82+
-- Node.js 18+
+- Rust 1.95+
+- Node.js 20.19+ or 22.12+ (required by Vite 8)
+- [Bun](https://bun.sh/) (this project uses `bun.lock`)
 - Platform-specific Tauri dependencies (see [Tauri Prerequisites](https://tauri.app/start/prerequisites/))
 
 ### Development
 
 ```bash
 # Install frontend dependencies
-npm install
+bun install
 
 # Run in development mode
-npm run tauri dev
+bun run tauri dev
 ```
 
 ### Production Build
 
 ```bash
 # Build for production
-npm run tauri build
+bun run tauri build
 ```
 
 ## Usage

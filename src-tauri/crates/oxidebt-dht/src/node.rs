@@ -1,5 +1,5 @@
 use crate::error::DhtError;
-use rand::Rng;
+use rand::RngExt;
 use sha1::{Digest, Sha1};
 use std::fmt;
 use std::net::SocketAddr;
@@ -11,7 +11,7 @@ pub struct NodeId(pub [u8; 20]);
 impl NodeId {
     pub fn generate() -> Self {
         let mut id = [0u8; 20];
-        rand::thread_rng().fill(&mut id);
+        rand::rng().fill(&mut id);
         Self(id)
     }
 
@@ -35,7 +35,7 @@ impl NodeId {
             }
         }
 
-        let r: u8 = rand::thread_rng().gen();
+        let r: u8 = rand::random();
         hasher.update([r]);
 
         let result = hasher.finalize();
