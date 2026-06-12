@@ -193,7 +193,7 @@ impl RssManager {
 
         for feed in feeds_to_check {
             match Self::fetch_feed(&feed.url, client).await {
-                Ok(items) => {
+                Ok(mut items) => {
                     // Update last refresh
                     {
                         let mut guard = feeds.write().await;
@@ -205,6 +205,15 @@ impl RssManager {
                                     .as_secs(),
                             );
                             f.last_error = None;
+                        }
+                    }
+
+                    // Flag items a rule has already downloaded
+                    {
+                        let guard = downloaded.read().await;
+                        for item in items.iter_mut() {
+                            item.is_downloaded =
+                                guard.contains(&format!("{}:{}", feed.id, item.torrent_url));
                         }
                     }
 
@@ -244,6 +253,17 @@ impl RssManager {
                                 {
                                     let mut guard = downloaded.write().await;
                                     guard.insert(item_hash.clone());
+                                }
+                                {
+                                    let mut guard = feed_items.write().await;
+                                    if let Some(list) = guard.get_mut(&feed.id) {
+                                        if let Some(stored) = list
+                                            .iter_mut()
+                                            .find(|i| i.torrent_url == item.torrent_url)
+                                        {
+                                            stored.is_downloaded = true;
+                                        }
+                                    }
                                 }
 
                                 // Send event
@@ -539,7 +559,7 @@ impl RssManager {
 
         if let Some(feed) = feed {
             match Self::fetch_feed(&feed.url, &self.client).await {
-                Ok(items) => {
+                Ok(mut items) => {
                     {
                         let mut guard = self.feeds.write().await;
                         if let Some(f) = guard.get_mut(feed_id) {
@@ -550,6 +570,13 @@ impl RssManager {
                                     .as_secs(),
                             );
                             f.last_error = None;
+                        }
+                    }
+                    {
+                        let guard = self.downloaded.read().await;
+                        for item in items.iter_mut() {
+                            item.is_downloaded =
+                                guard.contains(&format!("{}:{}", feed_id, item.torrent_url));
                         }
                     }
                     {
@@ -571,6 +598,16 @@ impl RssManager {
         } else {
             Err("Feed not found".to_string())
         }
+    }
+
+    /// Snapshot of the downloaded-item history for persistence.
+    pub async fn get_downloaded_history(&self) -> Vec<String> {
+        self.downloaded.read().await.iter().cloned().collect()
+    }
+
+    /// Restores downloaded-item history (called once on startup).
+    pub async fn restore_downloaded_history(&self, items: Vec<String>) {
+        self.downloaded.write().await.extend(items);
     }
 
     pub fn shutdown(&self) {
