@@ -106,6 +106,11 @@ pub struct ManagedTorrent {
     pub trackers: Vec<String>,
     pub tracker_info: Vec<TrackerInfo>,
     pub last_optimistic_unchoke: Instant,
+    /// Last time the regular (rate-based) choke round ran
+    pub last_choke_round: Instant,
+    /// Peer currently holding the optimistic unchoke slot; kept across regular
+    /// choke rounds and rotated on the optimistic interval
+    pub optimistic_unchoke_peer: Option<SocketAddr>,
     pub unchoked_peers: HashSet<SocketAddr>,
     pub cancel_tx: tokio::sync::broadcast::Sender<u32>,
     pub shutdown_tx: tokio::sync::broadcast::Sender<()>,
@@ -124,6 +129,14 @@ pub struct ManagedTorrent {
     pub share_limits: ShareLimits,
     /// Time when seeding started (for seeding time limit)
     pub seeding_started_at: Option<Instant>,
+    /// Whether completion actions (move-on-complete, external program) have
+    /// run. Pre-set for torrents that verify as already complete so re-adds
+    /// don't re-trigger them.
+    pub completion_processed: bool,
+    /// Whether this torrent's run loop is alive. The loop persists across
+    /// pause/resume (idling while parked), so resume and queue-dequeue must
+    /// not spawn a second one.
+    pub run_loop_active: bool,
     /// Save path for this torrent (may differ from default if category-based)
     pub save_path: std::path::PathBuf,
     /// Whether to move files on completion
@@ -131,10 +144,6 @@ pub struct ManagedTorrent {
 }
 
 impl ManagedTorrent {
-    pub fn new(meta: Metainfo) -> Self {
-        Self::with_save_path(meta, std::path::PathBuf::new())
-    }
-
     pub fn with_save_path(meta: Metainfo, save_path: std::path::PathBuf) -> Self {
         let piece_manager = PieceManager::new(
             meta.piece_count(),
@@ -168,6 +177,8 @@ impl ManagedTorrent {
             trackers,
             tracker_info,
             last_optimistic_unchoke: Instant::now(),
+            last_choke_round: Instant::now(),
+            optimistic_unchoke_peer: None,
             unchoked_peers: HashSet::new(),
             cancel_tx,
             shutdown_tx,
@@ -179,6 +190,8 @@ impl ManagedTorrent {
             tags: HashSet::new(),
             share_limits: ShareLimits::default(),
             seeding_started_at: None,
+            completion_processed: false,
+            run_loop_active: false,
             save_path,
             move_on_complete: None,
         }

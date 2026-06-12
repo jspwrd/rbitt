@@ -108,7 +108,7 @@ impl IoWorker {
     }
 
     pub async fn flush_all(&mut self) {
-        for (_, handle) in self.file_handles.iter_mut() {
+        for handle in self.file_handles.values_mut() {
             let _ = handle.file.sync_data().await;
         }
     }

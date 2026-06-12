@@ -1,13 +1,13 @@
 use crate::error::NetError;
 use oxidebt_constants::{
-    LSD_ANNOUNCE_INTERVAL, LSD_CHANNEL_CAPACITY, LSD_COOKIE_SIZE, LSD_MULTICAST_V4,
-    LSD_MULTICAST_V6, LSD_PORT,
+    LSD_CHANNEL_CAPACITY, LSD_COOKIE_SIZE, LSD_MULTICAST_V4, LSD_MULTICAST_V6, LSD_PORT,
 };
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::sync::broadcast;
-use tokio::time::interval;
 
 fn lsd_multicast_v4() -> Ipv4Addr {
     LSD_MULTICAST_V4.parse().expect("invalid LSD_MULTICAST_V4")
@@ -27,13 +27,13 @@ pub struct LsdAnnounce {
 pub struct LsdService {
     socket_v4: Option<Arc<UdpSocket>>,
     socket_v6: Option<Arc<UdpSocket>>,
-    port: u16,
     cookie: String,
     announce_tx: broadcast::Sender<LsdAnnounce>,
+    receiver_started: AtomicBool,
 }
 
 impl LsdService {
-    pub async fn new(port: u16) -> Result<Self, NetError> {
+    pub async fn new() -> Result<Self, NetError> {
         let mut cookie_bytes = [0u8; LSD_COOKIE_SIZE];
         rand::RngExt::fill(&mut rand::rng(), &mut cookie_bytes);
         let cookie = hex::encode(&cookie_bytes);
@@ -50,9 +50,9 @@ impl LsdService {
         Ok(Self {
             socket_v4,
             socket_v6,
-            port,
             cookie,
             announce_tx,
+            receiver_started: AtomicBool::new(false),
         })
     }
 
@@ -75,34 +75,37 @@ impl LsdService {
         self.announce_tx.subscribe()
     }
 
-    pub fn start(self: Arc<Self>, info_hashes: Vec<[u8; 20]>) {
+    /// Spawns the single background task that listens for BT-SEARCH messages
+    /// from other local clients and forwards them to `subscribe()`rs.
+    /// Subsequent calls are no-ops. Announcing is the caller's responsibility
+    /// via `announce()`, which always reflects the current torrent set and port.
+    pub fn start_receiver(self: &Arc<Self>) {
+        if self.receiver_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+
         let service = self.clone();
         tokio::spawn(async move {
-            service.run(info_hashes).await;
+            loop {
+                match service.receive().await {
+                    Ok(announce) => {
+                        let _ = service.announce_tx.send(announce);
+                    }
+                    // Parse failures are routine (our own announces, foreign
+                    // multicast traffic); socket errors need a backoff so a
+                    // dead socket doesn't spin this loop.
+                    Err(NetError::Io(e)) => {
+                        tracing::warn!("LSD receive socket error: {}", e);
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                    }
+                    Err(_) => {}
+                }
+            }
         });
     }
 
-    async fn run(&self, info_hashes: Vec<[u8; 20]>) {
-        let mut announce_interval = interval(LSD_ANNOUNCE_INTERVAL);
-
-        loop {
-            tokio::select! {
-                _ = announce_interval.tick() => {
-                    for hash in &info_hashes {
-                        let _ = self.announce(hash).await;
-                    }
-                }
-                result = self.receive() => {
-                    if let Ok(announce) = result {
-                        let _ = self.announce_tx.send(announce);
-                    }
-                }
-            }
-        }
-    }
-
-    pub async fn announce(&self, info_hash: &[u8; 20]) -> Result<(), NetError> {
-        let message = self.format_announce(info_hash);
+    pub async fn announce(&self, info_hash: &[u8; 20], listen_port: u16) -> Result<(), NetError> {
+        let message = self.format_announce(info_hash, listen_port);
 
         if let Some(ref socket) = self.socket_v4 {
             let dest = SocketAddrV4::new(lsd_multicast_v4(), LSD_PORT);
@@ -117,7 +120,7 @@ impl LsdService {
         Ok(())
     }
 
-    fn format_announce(&self, info_hash: &[u8; 20]) -> String {
+    fn format_announce(&self, info_hash: &[u8; 20], listen_port: u16) -> String {
         let hash_hex = hex::encode(info_hash);
         // BEP-14: Message must end with \r\n\r\n (double CRLF)
         format!(
@@ -129,7 +132,7 @@ impl LsdService {
              \r\n",
             host = lsd_multicast_v4(),
             port = LSD_PORT,
-            listen_port = self.port,
+            listen_port = listen_port,
             hash = hash_hex,
             cookie = self.cookie
         )

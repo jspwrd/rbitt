@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
@@ -89,15 +89,22 @@ function App() {
   const [fileInfo, setFileInfo] = useState<TorrentFileInfo[]>([]);
   const [globalStatsData, setGlobalStatsData] = useState<GlobalStats | null>(null);
 
-  // Auto-init on mount
+  const initStartedRef = useRef(false);
+
+  // Auto-init on mount, preferring the download dir from the last session.
+  // The ref guards against StrictMode's double effect invocation in dev.
   useEffect(() => {
+    if (initStartedRef.current) return;
+    initStartedRef.current = true;
     async function autoInit() {
       try {
-        const defaultDir: string = await invoke("get_default_download_dir");
-        setDownloadDir(defaultDir);
-        setTempDownloadDir(defaultDir);
+        const storedDir: string | null = await invoke("get_stored_download_dir");
+        const dir: string =
+          storedDir ?? (await invoke("get_default_download_dir"));
+        setDownloadDir(dir);
+        setTempDownloadDir(dir);
 
-        await invoke("init_engine", { downloadDir: defaultDir });
+        await invoke("init_engine", { downloadDir: dir });
         setEngineInitialized(true);
       } catch (e) {
         console.error("Failed to auto-initialize:", e);

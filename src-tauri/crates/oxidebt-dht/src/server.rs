@@ -254,7 +254,9 @@ impl DhtServer {
 
             let mut new_nodes = Vec::new();
 
-            for (i, result) in results.into_iter().enumerate() {
+            // join_all preserves input order, so zipping pairs each result
+            // with the node it was sent to.
+            for (node, result) in nodes_to_query.iter().zip(results) {
                 match result {
                     Ok(DhtResponse::GetPeers {
                         peers: Some(p),
@@ -284,9 +286,7 @@ impl DhtServer {
                     Ok(_) => {}
                     Err(e) => {
                         debug!("get_peers query failed: {}", e);
-                        if i < nodes_to_query.len() {
-                            self.routing_table.mark_failed(&nodes_to_query[i].id);
-                        }
+                        self.routing_table.mark_failed(&node.id);
                     }
                 }
             }
@@ -364,7 +364,9 @@ impl DhtServer {
 
             let mut new_nodes = Vec::new();
 
-            for (i, result) in results.into_iter().enumerate() {
+            // join_all preserves input order, so zipping pairs each result
+            // (and its announce token) with the node that sent it.
+            for (node, result) in nodes_to_query.iter().zip(results) {
                 match result {
                     Ok(DhtResponse::GetPeers {
                         peers: Some(p),
@@ -373,8 +375,8 @@ impl DhtServer {
                         ..
                     }) => {
                         peers.extend(p);
-                        if i < nodes_to_query.len() && !token.is_empty() {
-                            tokens.push((nodes_to_query[i].addr, token));
+                        if !token.is_empty() {
+                            tokens.push((node.addr, token));
                         }
                         if let Some(nodes) = nodes {
                             for n in nodes {
@@ -390,8 +392,8 @@ impl DhtServer {
                         token,
                         ..
                     }) => {
-                        if i < nodes_to_query.len() && !token.is_empty() {
-                            tokens.push((nodes_to_query[i].addr, token));
+                        if !token.is_empty() {
+                            tokens.push((node.addr, token));
                         }
                         for n in nodes {
                             if !queried.contains(&n.id) {
@@ -403,9 +405,7 @@ impl DhtServer {
                     Ok(_) => {}
                     Err(e) => {
                         debug!("get_peers query failed: {}", e);
-                        if i < nodes_to_query.len() {
-                            self.routing_table.mark_failed(&nodes_to_query[i].id);
-                        }
+                        self.routing_table.mark_failed(&node.id);
                     }
                 }
             }

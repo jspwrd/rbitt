@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use oxidebt_constants::{
-    KEEPALIVE_INTERVAL, MAX_PARALLEL_PIECES, MAX_REQUESTS_PER_PEER, MAX_REQUEST_LENGTH,
-    PEX_INITIAL_DELAY, PEX_MAX_IPV4_PEERS, PEX_SEND_INTERVAL,
+    MAX_PARALLEL_PIECES, MAX_PEERS_PER_TORRENT, MAX_REQUESTS_PER_PEER, MAX_REQUEST_LENGTH,
+    PEER_TICK_INTERVAL, PEX_INITIAL_DELAY, PEX_MAX_IPV4_PEERS, PEX_SEND_INTERVAL,
 };
 use oxidebt_disk::DiskManager;
 use oxidebt_net::BandwidthLimiter;
@@ -59,6 +59,14 @@ pub async fn handle_incoming_connection(
         for (hash, torrent) in torrents_guard.iter() {
             if let Some(our_hash) = torrent.info_hash_bytes() {
                 if our_hash == info_hash {
+                    if torrent.peers.len() >= MAX_PEERS_PER_TORRENT {
+                        tracing::debug!(
+                            "Rejecting incoming connection from {} (torrent at peer limit {})",
+                            addr,
+                            MAX_PEERS_PER_TORRENT
+                        );
+                        return Ok(());
+                    }
                     found = Some((hash.clone(), torrent.meta.piece_count()));
                     break;
                 }
@@ -95,7 +103,7 @@ pub async fn handle_incoming_connection(
     .await
 }
 
-/// Handles a peer connection after handshake is complete.
+/// Handles a peer connection after the TCP connect.
 #[allow(clippy::too_many_arguments)]
 pub async fn handle_peer_connection(
     hash: String,
@@ -108,6 +116,45 @@ pub async fn handle_peer_connection(
     listen_port: u16,
     no_seed_mode: Arc<AtomicBool>,
 ) -> Result<(), EngineError> {
+    let result = run_peer_connection(
+        &hash,
+        peer_addr,
+        &mut conn,
+        &torrents,
+        &disk_manager,
+        &bandwidth_limiter,
+        &event_tx,
+        listen_port,
+        &no_seed_mode,
+    )
+    .await;
+
+    // Always announce departure — even when the handshake or setup failed
+    // before Connected was sent — so the engine's peers/connecting_peers
+    // bookkeeping is cleaned up. The event handler tolerates unknown peers,
+    // and a leaked connecting_peers entry would permanently consume a
+    // half-open slot and block ever retrying this address.
+    let _ = event_tx.send(PeerEvent::Disconnected {
+        torrent_hash: hash,
+        peer_addr,
+    });
+
+    result
+}
+
+/// The fallible part of a peer connection: handshake, setup, message loop.
+#[allow(clippy::too_many_arguments)]
+async fn run_peer_connection(
+    hash: &str,
+    peer_addr: SocketAddr,
+    conn: &mut PeerConnection,
+    torrents: &Arc<RwLock<HashMap<String, ManagedTorrent>>>,
+    disk_manager: &Arc<DiskManager>,
+    bandwidth_limiter: &Arc<RwLock<BandwidthLimiter>>,
+    event_tx: &mpsc::UnboundedSender<PeerEvent>,
+    listen_port: u16,
+    no_seed_mode: &Arc<AtomicBool>,
+) -> Result<(), EngineError> {
     if conn.state() != oxidebt_peer::PeerState::Connected {
         conn.handshake().await?;
     }
@@ -119,14 +166,14 @@ pub async fn handle_peer_connection(
     }
 
     let _ = event_tx.send(PeerEvent::Connected {
-        torrent_hash: hash.clone(),
+        torrent_hash: hash.to_string(),
         peer_addr,
     });
 
     let (bitfield, piece_count) = {
         let torrents = torrents.read();
         torrents
-            .get(&hash)
+            .get(hash)
             .map(|t| (t.piece_manager.bitfield(), t.meta.piece_count()))
             .unwrap_or_else(|| (Bitfield::new(0), 0))
     };
@@ -154,7 +201,7 @@ pub async fn handle_peer_connection(
     let (cancel_rx, shutdown_rx) = {
         let torrents = torrents.read();
         torrents
-            .get(&hash)
+            .get(hash)
             .map(|t| (t.cancel_tx.subscribe(), t.shutdown_tx.subscribe()))
             .unwrap_or_else(|| {
                 let (tx1, rx1) = tokio::sync::broadcast::channel::<u32>(1);
@@ -165,27 +212,20 @@ pub async fn handle_peer_connection(
             })
     };
 
-    let result = peer_message_loop(
-        &hash,
+    peer_message_loop(
+        hash,
         peer_addr,
-        &mut conn,
-        &torrents,
-        &disk_manager,
-        &bandwidth_limiter,
-        &event_tx,
+        conn,
+        torrents,
+        disk_manager,
+        bandwidth_limiter,
+        event_tx,
         cancel_rx,
         shutdown_rx,
         listen_port,
-        &no_seed_mode,
+        no_seed_mode,
     )
-    .await;
-
-    let _ = event_tx.send(PeerEvent::Disconnected {
-        torrent_hash: hash.clone(),
-        peer_addr,
-    });
-
-    result
+    .await
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -232,7 +272,7 @@ async fn peer_message_loop(
                     no_seed_mode,
                 ).await?;
             }
-            _ = tokio::time::sleep(KEEPALIVE_INTERVAL / 4) => {
+            _ = tokio::time::sleep(PEER_TICK_INTERVAL) => {
                 conn.maybe_send_keepalive().await?;
                 handle_periodic_tasks(
                     hash,
@@ -500,8 +540,18 @@ async fn handle_piece_message(
 
     let _ = event_tx.send(PeerEvent::BlockReceived {
         torrent_hash: hash.to_string(),
+        peer_addr,
         size: data.len() as u64,
     });
+
+    // Free this block's slot in the pipeline budget; otherwise received blocks
+    // keep counting against MAX_REQUESTS_PER_PEER until the whole piece verifies.
+    if let Some(blocks) = pending_requests.get_mut(&index) {
+        blocks.retain(|&(offset, _)| offset != begin);
+        if blocks.is_empty() {
+            pending_requests.remove(&index);
+        }
+    }
 
     disk_manager.write_block(hash, index, begin, &data).await?;
 
@@ -560,6 +610,7 @@ async fn handle_piece_message(
                 );
             } else {
                 tracing::warn!("Piece {} failed verification, will re-download", index);
+                pending_requests.remove(&index);
                 let torrents = torrents.read();
                 if let Some(torrent) = torrents.get(hash) {
                     torrent.piece_manager.mark_piece_failed(index);
@@ -610,7 +661,7 @@ async fn handle_request_message(
     }
 
     // No Seed Mode: reject all upload requests
-    if no_seed_mode.load(Ordering::Relaxed) {
+    if no_seed_mode.load(Ordering::Acquire) {
         tracing::debug!(
             "No Seed Mode: rejecting request from {} for piece {}",
             peer_addr,
@@ -669,6 +720,7 @@ async fn handle_request_message(
 
         let _ = event_tx.send(PeerEvent::BlockSent {
             torrent_hash: hash.to_string(),
+            peer_addr,
             size: length as u64,
         });
     } else if have_piece {

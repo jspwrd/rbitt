@@ -7,85 +7,29 @@ use oxidebt_constants::{
     UDP_TRACKER_PROTOCOL_ID, UDP_TRACKER_REQUEST_TIMEOUT,
 };
 use oxidebt_torrent::InfoHashV1;
-use parking_lot::RwLock;
-use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::net::UdpSocket;
 use tokio::time::timeout;
 use url::Url;
 
-/// BEP-15: Maximum number of retries before giving up
-const UDP_MAX_RETRIES: u32 = 8;
+/// Retransmit attempts per request, with BEP-15 timeouts of 15 * 2^n seconds.
+/// The spec allows up to n=8 (~64 minutes total) but that is meant for
+/// dedicated announcer daemons; announces here run inline in engine tasks, so
+/// we bound a dead tracker at 15 + 30 + 60 = 105 seconds.
+///
+/// Connection IDs are deliberately not cached across calls: they are bound to
+/// the source (IP, port) of the socket that obtained them, and each call binds
+/// a fresh ephemeral socket. Reusing an ID from a previous socket makes
+/// strict trackers drop our packets silently. The cache would save one UDP
+/// round-trip per announce at multi-minute announce intervals.
+const UDP_MAX_RETRIES: u32 = 3;
 
-/// BEP-15: Connection IDs are valid for at least 1 minute
-/// We use 55 seconds to be conservative
-const CONNECTION_ID_TTL: Duration = Duration::from_secs(55);
-
-/// Cached connection ID with expiry time
-struct CachedConnection {
-    connection_id: i64,
-    expires_at: Instant,
-}
-
-impl CachedConnection {
-    fn new(connection_id: i64) -> Self {
-        Self {
-            connection_id,
-            expires_at: Instant::now() + CONNECTION_ID_TTL,
-        }
-    }
-
-    fn is_valid(&self) -> bool {
-        Instant::now() < self.expires_at
-    }
-}
-
-pub struct UdpTracker {
-    /// Cache of connection IDs per tracker address
-    connection_cache: RwLock<HashMap<SocketAddr, CachedConnection>>,
-}
+pub struct UdpTracker;
 
 impl UdpTracker {
     pub fn new() -> Self {
-        Self {
-            connection_cache: RwLock::new(HashMap::new()),
-        }
-    }
-
-    /// Get a cached connection ID or establish a new connection
-    async fn get_connection_id(
-        &self,
-        socket: &UdpSocket,
-        addr: SocketAddr,
-    ) -> Result<i64, TrackerError> {
-        // Check cache first
-        {
-            let cache = self.connection_cache.read();
-            if let Some(cached) = cache.get(&addr) {
-                if cached.is_valid() {
-                    return Ok(cached.connection_id);
-                }
-            }
-        }
-
-        // Cache miss or expired, establish new connection
-        let connection_id = self.connect(socket).await?;
-
-        // Store in cache
-        {
-            let mut cache = self.connection_cache.write();
-            cache.insert(addr, CachedConnection::new(connection_id));
-        }
-
-        Ok(connection_id)
-    }
-
-    /// Invalidate cached connection for a tracker (called on errors)
-    #[allow(dead_code)]
-    fn invalidate_connection(&self, addr: &SocketAddr) {
-        let mut cache = self.connection_cache.write();
-        cache.remove(addr);
+        Self
     }
 
     pub async fn announce(
@@ -96,8 +40,7 @@ impl UdpTracker {
         let socket = UdpSocket::bind("0.0.0.0:0").await?;
         socket.connect(addr).await?;
 
-        // Use cached connection ID if available
-        let connection_id = self.get_connection_id(&socket, addr).await?;
+        let connection_id = self.connect(&socket).await?;
 
         let transaction_id: u32 = rand::random();
 
@@ -120,8 +63,7 @@ impl UdpTracker {
 
         // BEP-15: Exponential backoff for announce
         for retry in 0..UDP_MAX_RETRIES {
-            let timeout_secs = 15u64 * (1 << retry);
-            let timeout_duration = Duration::from_secs(timeout_secs.min(3840));
+            let timeout_duration = Duration::from_secs(15u64 << retry);
 
             socket.send(&request).await?;
 
@@ -142,8 +84,8 @@ impl UdpTracker {
         Err(TrackerError::Timeout)
     }
 
-    /// BEP-15: Connect with exponential backoff retry.
-    /// Timeout starts at 15 seconds and doubles each retry: 15, 30, 60, 120...
+    /// BEP-15 connect: obtains a connection ID valid for the lifetime of this
+    /// socket (trackers honor it for at least one minute).
     async fn connect(&self, socket: &UdpSocket) -> Result<i64, TrackerError> {
         let transaction_id: u32 = rand::random();
 
@@ -156,8 +98,7 @@ impl UdpTracker {
 
         // BEP-15: Exponential backoff starting at 15 seconds
         for retry in 0..UDP_MAX_RETRIES {
-            let timeout_secs = 15u64 * (1 << retry); // 15, 30, 60, 120, 240, 480, 960, 1920
-            let timeout_duration = Duration::from_secs(timeout_secs.min(3840)); // Cap at ~1 hour
+            let timeout_duration = Duration::from_secs(15u64 << retry); // 15, 30, 60
 
             socket.send(&request).await?;
 
@@ -254,8 +195,7 @@ impl UdpTracker {
         let socket = UdpSocket::bind("0.0.0.0:0").await?;
         socket.connect(addr).await?;
 
-        // Use cached connection ID if available
-        let connection_id = self.get_connection_id(&socket, addr).await?;
+        let connection_id = self.connect(&socket).await?;
 
         let transaction_id: u32 = rand::random();
 

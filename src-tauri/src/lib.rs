@@ -119,11 +119,20 @@ pub struct MagnetInfo {
 
 #[tauri::command]
 async fn init_engine(state: State<'_, AppState>, download_dir: String) -> Result<(), String> {
+    // Hold the write lock across construction so concurrent calls (React
+    // StrictMode double-fires effects in dev) can't both see None; a second
+    // engine would leak the first one's background tasks and double every
+    // announce and disk write.
+    let mut guard = state.engine.write().await;
+    if guard.is_some() {
+        return Ok(());
+    }
+
     let engine = TorrentEngine::new(PathBuf::from(download_dir))
         .await
         .map_err(|e| format!("Failed to init engine: {}", e))?;
 
-    *state.engine.write().await = Some(engine);
+    *guard = Some(engine);
     Ok(())
 }
 
@@ -473,6 +482,26 @@ fn get_default_download_dir() -> Result<String, String> {
     dirs::download_dir()
         .map(|p| p.to_string_lossy().to_string())
         .ok_or_else(|| "Could not determine default downloads directory".to_string())
+}
+
+/// Returns the download directory from a previous session, if any. The
+/// frontend uses this to skip the first-run setup screen.
+#[tauri::command]
+async fn get_stored_download_dir() -> Option<String> {
+    engine::persistence::load_settings()
+        .await
+        .and_then(|s| s.download_dir)
+        .map(|p| p.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn get_bandwidth_limits(state: State<'_, AppState>) -> Result<(u64, u64), String> {
+    let guard = state.engine.read().await;
+    let engine = guard
+        .as_ref()
+        .ok_or_else(|| "Engine not initialized".to_string())?;
+
+    Ok(engine.get_bandwidth_limits())
 }
 
 // ========== Sequential Download ==========
@@ -1450,6 +1479,7 @@ pub fn run() {
             resume_torrent,
             remove_torrent,
             set_bandwidth_limits,
+            get_bandwidth_limits,
             set_queue_settings,
             get_queue_settings,
             set_no_seed_mode,
@@ -1457,6 +1487,7 @@ pub fn run() {
             set_disconnect_on_complete,
             get_disconnect_on_complete,
             get_default_download_dir,
+            get_stored_download_dir,
             // Sequential download
             set_sequential_download,
             get_sequential_download,
@@ -1515,6 +1546,20 @@ pub fn run() {
             get_search_results,
             delete_search,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // Flush settings and session to disk before the process exits.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                use tauri::Manager;
+                let state: tauri::State<AppState> = app_handle.state();
+                let engine = state.engine.clone();
+                tauri::async_runtime::block_on(async move {
+                    let guard = engine.read().await;
+                    if let Some(engine) = guard.as_ref() {
+                        engine.save_all_now().await;
+                    }
+                });
+            }
+        });
 }
