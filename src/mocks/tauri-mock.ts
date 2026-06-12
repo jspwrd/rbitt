@@ -428,6 +428,7 @@ function installMock() {
     },
   };
 
+  (window as any).__RBITT_MOCK__ = true;
   console.info(`[tauri-mock] installed (scenario: ${scenario})`);
 }
 

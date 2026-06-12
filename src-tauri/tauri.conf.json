@@ -16,7 +16,13 @@
         "width": 1200,
         "height": 800,
         "minWidth": 900,
-        "minHeight": 600
+        "minHeight": 600,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": {
+          "x": 20.0,
+          "y": 17.0
+        }
       }
     ],
     "security": {
@@ -51,7 +57,9 @@
     "copyright": "Copyright (c) 2024 Jasper",
     "fileAssociations": [
       {
-        "ext": ["torrent"],
+        "ext": [
+          "torrent"
+        ],
         "mimeType": "application/x-bittorrent",
         "name": "BitTorrent File",
         "description": "BitTorrent metainfo file",

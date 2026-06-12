@@ -24,7 +24,10 @@ export function Toolbar({
   const canRemove = !!selectedTorrentData;
 
   return (
-    <div className="toolbar">
+    // data-tauri-drag-region: the toolbar doubles as the window titlebar
+    // (titleBarStyle Overlay); empty areas drag the window, buttons still
+    // receive clicks since the attribute only applies to the element itself.
+    <div className="toolbar" data-tauri-drag-region>
       <div className="toolbar-group">
         <button className="toolbar-btn" onClick={onAdd} title="Add Torrent">
           <Icons.Add />

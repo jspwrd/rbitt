@@ -506,6 +506,12 @@ select {
   flex-shrink: 0;
 }
 
+/* The toolbar is the titlebar on macOS (overlay traffic lights): clear the
+   lights on the left. */
+.platform-macos .toolbar {
+  padding-left: 86px;
+}
+
 .toolbar-group {
   display: flex;
   align-items: center;
