@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { Icons } from "./Icons";
+import { THEMES, ACCENTS } from "../themes";
 import type {
   WatchFolderInfo,
   CategoryInfo,
@@ -31,10 +32,10 @@ interface SettingsModalProps {
   onDisconnectOnCompleteChange: (enabled: boolean) => void;
   onApplyBandwidthLimits: () => void;
   onApplyQueueSettings: () => void;
-  useStatusIndicators: boolean;
-  onUseStatusIndicatorsChange: (enabled: boolean) => void;
   themeMode: ThemeMode;
   onThemeModeChange: (mode: ThemeMode) => void;
+  accent: string;
+  onAccentChange: (accent: string) => void;
   onClose: () => void;
   onError: (error: string) => void;
 }
@@ -61,10 +62,10 @@ export function SettingsModal({
   onDisconnectOnCompleteChange,
   onApplyBandwidthLimits,
   onApplyQueueSettings,
-  useStatusIndicators,
-  onUseStatusIndicatorsChange,
   themeMode,
   onThemeModeChange,
+  accent,
+  onAccentChange,
   onClose,
   onError,
 }: SettingsModalProps) {
@@ -320,45 +321,72 @@ export function SettingsModal({
                 </div>
 
                 <div className="settings-section">
-                  <h3>Appearance</h3>
-                  <div className="setting-row">
-                    <label>Theme</label>
-                    <div className="theme-selector">
-                      <button
-                        className={`theme-option ${themeMode === "light" ? "active" : ""}`}
-                        onClick={() => onThemeModeChange("light")}
-                      >
-                        <Icons.Sun />
-                        <span>Light</span>
-                      </button>
-                      <button
-                        className={`theme-option ${themeMode === "dark" ? "active" : ""}`}
-                        onClick={() => onThemeModeChange("dark")}
-                      >
-                        <Icons.Moon />
-                        <span>Dark</span>
-                      </button>
-                      <button
-                        className={`theme-option ${themeMode === "system" ? "active" : ""}`}
-                        onClick={() => onThemeModeChange("system")}
-                      >
+                  <h3>Theme</h3>
+                  <div className="theme-grid">
+                    <button
+                      className={`theme-card ${themeMode === "system" ? "active" : ""}`}
+                      onClick={() => onThemeModeChange("system")}
+                    >
+                      <div className="theme-swatch theme-swatch-system">
+                        <div className="swatch-half" style={{ background: "#101012" }}>
+                          <span style={{ background: "#6a6ef5" }} />
+                        </div>
+                        <div className="swatch-half" style={{ background: "#f6f6f8" }}>
+                          <span style={{ background: "#5559e6" }} />
+                        </div>
+                      </div>
+                      <span className="theme-card-label">
                         <Icons.Monitor />
-                        <span>System</span>
+                        System
+                      </span>
+                    </button>
+                    {THEMES.map((theme) => (
+                      <button
+                        key={theme.id}
+                        className={`theme-card ${themeMode === theme.id ? "active" : ""}`}
+                        onClick={() => onThemeModeChange(theme.id)}
+                      >
+                        <div
+                          className="theme-swatch"
+                          style={{ background: theme.preview.bg }}
+                        >
+                          <div
+                            className="swatch-row"
+                            style={{ background: theme.preview.surface }}
+                          >
+                            <i style={{ background: theme.preview.accent }} />
+                            <b style={{ background: theme.preview.text }} />
+                          </div>
+                          <div className="swatch-dots">
+                            {theme.preview.states.map((color, i) => (
+                              <i key={i} style={{ background: color }} />
+                            ))}
+                          </div>
+                        </div>
+                        <span className="theme-card-label">{theme.label}</span>
                       </button>
-                    </div>
+                    ))}
                   </div>
-                  <div className="setting-row checkbox-row">
-                    <label className="checkbox-label">
-                      <input
-                        type="checkbox"
-                        checked={useStatusIndicators}
-                        onChange={(e) => onUseStatusIndicatorsChange(e.target.checked)}
+                </div>
+
+                <div className="settings-section">
+                  <h3>Accent color</h3>
+                  <div className="accent-row">
+                    {ACCENTS.map((a) => (
+                      <button
+                        key={a.id}
+                        className={`accent-dot ${accent === a.id ? "active" : ""} ${
+                          a.color === null ? "accent-auto" : ""
+                        }`}
+                        style={a.color ? { background: a.color } : undefined}
+                        title={a.label}
+                        onClick={() => onAccentChange(a.id)}
                       />
-                      <span>Use animated status indicators instead of icons</span>
-                    </label>
+                    ))}
                   </div>
                   <p className="text-secondary setting-note">
-                    Shows pulsing colored dots to indicate torrent status instead of static icons.
+                    Overrides the selected theme's accent. "Theme default" keeps
+                    each theme's own color.
                   </p>
                 </div>
               </>

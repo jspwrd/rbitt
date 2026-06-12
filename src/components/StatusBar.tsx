@@ -20,11 +20,11 @@ export function StatusBar({ torrents, globalStats }: StatusBarProps) {
   return (
     <div className="status-bar">
       <div className="status-section">
-        <span className="status-item">
+        <span className="status-item speed-down">
           <Icons.Download />
           <span>{formatSpeed(globalStats?.download_rate ?? localStats.totalDownload)}</span>
         </span>
-        <span className="status-item">
+        <span className="status-item speed-up">
           <Icons.Upload />
           <span>{formatSpeed(globalStats?.upload_rate ?? localStats.totalUpload)}</span>
         </span>

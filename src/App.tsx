@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
 import "./App.css";
+import "./themes.css";
 import { useTheme } from "./hooks";
 import { checkForUpdates } from "./updater";
 
@@ -80,8 +81,7 @@ function App() {
   const [showSearchModal, setShowSearchModal] = useState(false);
 
   // UI preferences
-  const [useStatusIndicators, setUseStatusIndicators] = useState(false);
-  const { themeMode, setTheme } = useTheme();
+  const { themeMode, setTheme, accent, setAccent } = useTheme();
 
   // Detail panel data
   const [trackerInfo, setTrackerInfo] = useState<TrackerStatusInfo[]>([]);
@@ -590,14 +590,13 @@ function App() {
               }
             }}
             onAddClick={() => setShowAddModal(true)}
-            useStatusIndicators={useStatusIndicators}
           />
 
           {selectedTorrentData && (
             <ResizablePanel
-              minHeight={100}
+              minHeight={120}
               maxHeight={600}
-              defaultHeight={200}
+              defaultHeight={260}
               storageKey="detailPanelHeight"
             >
               <DetailPanel
@@ -654,10 +653,10 @@ function App() {
           onDisconnectOnCompleteChange={toggleDisconnectOnComplete}
           onApplyBandwidthLimits={applyBandwidthLimits}
           onApplyQueueSettings={applyQueueSettings}
-          useStatusIndicators={useStatusIndicators}
-          onUseStatusIndicatorsChange={setUseStatusIndicators}
           themeMode={themeMode}
           onThemeModeChange={setTheme}
+          accent={accent}
+          onAccentChange={setAccent}
           onClose={() => setShowSettings(false)}
           onError={setError}
         />

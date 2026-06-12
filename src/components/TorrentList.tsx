@@ -1,36 +1,147 @@
+import { useMemo, useState } from "react";
 import { Icons } from "./Icons";
-import { StatusIndicator } from "./StatusIndicator";
 import {
   formatBytes,
   formatSpeed,
   formatEta,
   formatState,
-  getStateColor,
   isDownloading,
-  isUploading,
-  isPaused,
-  isChecking,
-  isCompleted,
-  isQueued,
-  isError,
 } from "../utils";
 import type { TorrentStatus, TorrentState } from "../types";
 
-// Number of columns in the torrent table
-const TORRENT_TABLE_COLUMNS = 9;
+type SortKey = "active" | "name" | "size" | "progress";
 
-// Get the relevant speed for the status indicator based on torrent state
-function getRelevantSpeed(torrent: TorrentStatus): number {
-  // For uploading states, use upload rate
-  if (isUploading(torrent.state)) {
-    return torrent.upload_rate;
+const SORT_STORAGE_KEY = "torrent-sort";
+
+const SORT_LABELS: Record<SortKey, string> = {
+  active: "Activity",
+  name: "Name",
+  size: "Size",
+  progress: "Progress",
+};
+
+function getStoredSort(): SortKey {
+  const stored = localStorage.getItem(SORT_STORAGE_KEY);
+  return stored === "name" || stored === "size" || stored === "progress"
+    ? stored
+    : "active";
+}
+
+/** Pill style + whether its dot pulses, per state. */
+function pillFor(state: TorrentState): { cls: string; pulse: boolean } {
+  switch (state) {
+    case "downloading":
+    case "forcedDL":
+      return { cls: "pill-downloading", pulse: true };
+    case "uploading":
+    case "forcedUP":
+      return { cls: "pill-seeding", pulse: true };
+    case "metaDL":
+    case "forcedMetaDL":
+      return { cls: "pill-metadata", pulse: true };
+    case "checkingDL":
+    case "checkingUP":
+    case "checkingResumeData":
+    case "allocating":
+      return { cls: "pill-checking", pulse: true };
+    case "moving":
+      return { cls: "pill-moving", pulse: true };
+    case "stalledDL":
+    case "stalledUP":
+      return { cls: "pill-stalled", pulse: false };
+    case "completed":
+      return { cls: "pill-completed", pulse: false };
+    case "queuedDL":
+    case "queuedUP":
+      return { cls: "pill-queued", pulse: false };
+    case "error":
+    case "missingFiles":
+      return { cls: "pill-error", pulse: false };
+    default:
+      return { cls: "pill-paused", pulse: false };
   }
-  // For downloading states (including metadata), use download rate
-  if (isDownloading(torrent.state)) {
-    return torrent.download_rate;
+}
+
+function fillFor(state: TorrentState): string {
+  switch (state) {
+    case "completed":
+      return "fill-completed";
+    case "uploading":
+    case "forcedUP":
+    case "stalledUP":
+      return "fill-seeding";
+    case "stalledDL":
+      return "fill-stalled";
+    case "error":
+    case "missingFiles":
+      return "fill-error";
+    case "checkingDL":
+    case "checkingUP":
+    case "checkingResumeData":
+      return "fill-checking";
+    case "pausedDL":
+    case "pausedUP":
+    case "stoppedDL":
+    case "stoppedUP":
+    case "queuedDL":
+    case "queuedUP":
+      return "fill-paused";
+    default:
+      return "";
   }
-  // For other states, return 0 (no pulse or steady pulse)
-  return 0;
+}
+
+function metaLine(torrent: TorrentStatus): string {
+  const parts: string[] = [];
+  if (torrent.total_size > 0) {
+    parts.push(formatBytes(torrent.total_size));
+  }
+  if (torrent.state === "metaDL" || torrent.state === "forcedMetaDL") {
+    parts.push("fetching metadata from swarm");
+    return parts.join(" · ");
+  }
+  parts.push(`${torrent.seeds} seeds`);
+  parts.push(`${torrent.peers} peers`);
+  if (
+    isDownloading(torrent.state) &&
+    torrent.download_rate > 0 &&
+    torrent.total_size > 0
+  ) {
+    parts.push(
+      `${formatEta(torrent.downloaded, torrent.total_size, torrent.download_rate)} left`,
+    );
+  }
+  return parts.join(" · ");
+}
+
+function sortTorrents(torrents: TorrentStatus[], key: SortKey): TorrentStatus[] {
+  const byName = (a: TorrentStatus, b: TorrentStatus) =>
+    a.name.localeCompare(b.name);
+
+  const sorted = [...torrents];
+  switch (key) {
+    case "name":
+      sorted.sort(byName);
+      break;
+    case "size":
+      sorted.sort((a, b) => b.total_size - a.total_size || byName(a, b));
+      break;
+    case "progress":
+      sorted.sort((a, b) => b.progress - a.progress || byName(a, b));
+      break;
+    case "active":
+      // Transferring first (fastest on top), then incomplete, then by name.
+      // The name tiebreak keeps the list stable across status polls.
+      sorted.sort((a, b) => {
+        const rateA = a.download_rate + a.upload_rate;
+        const rateB = b.download_rate + b.upload_rate;
+        if (rateA !== rateB) return rateB - rateA;
+        if (a.progress !== b.progress) return a.progress - b.progress;
+        return byName(a, b);
+      });
+      break;
+  }
+  return sorted;
 }
 
 interface TorrentListProps {
@@ -39,41 +150,6 @@ interface TorrentListProps {
   onSelect: (infoHash: string | null) => void;
   onDoubleClick: (torrent: TorrentStatus) => void;
   onAddClick: () => void;
-  useStatusIndicators?: boolean;
-}
-
-function getStateIcon(state: TorrentState) {
-  if (isError(state)) {
-    return <Icons.Error />;
-  }
-  if (isChecking(state)) {
-    return <Icons.Checking />;
-  }
-  if (isQueued(state)) {
-    return <Icons.Queued />;
-  }
-  if (isCompleted(state)) {
-    return <Icons.Completed />;
-  }
-  if (isPaused(state)) {
-    return <Icons.Stopped />;
-  }
-  if (state === "stalledDL") {
-    return <Icons.Downloading />;
-  }
-  if (state === "stalledUP") {
-    return <Icons.Seeding />;
-  }
-  if (state === "metaDL" || state === "forcedMetaDL") {
-    return <Icons.Downloading />;
-  }
-  if (state === "uploading" || state === "forcedUP") {
-    return <Icons.Seeding />;
-  }
-  if (state === "downloading" || state === "forcedDL") {
-    return <Icons.Downloading />;
-  }
-  return <Icons.Downloading />;
 }
 
 export function TorrentList({
@@ -82,113 +158,123 @@ export function TorrentList({
   onSelect,
   onDoubleClick,
   onAddClick,
-  useStatusIndicators = false,
 }: TorrentListProps) {
-  const handleContainerClick = (e: React.MouseEvent) => {
-    // Only deselect if clicking directly on the container or table (not on a row)
+  const [sortKey, setSortKey] = useState<SortKey>(getStoredSort);
+
+  const sorted = useMemo(() => sortTorrents(torrents, sortKey), [torrents, sortKey]);
+
+  const changeSort = (key: SortKey) => {
+    setSortKey(key);
+    localStorage.setItem(SORT_STORAGE_KEY, key);
+  };
+
+  const handleBackgroundClick = (e: React.MouseEvent) => {
     const target = e.target as HTMLElement;
     if (
-      target.classList.contains("torrent-list-container") ||
-      target.classList.contains("torrent-table") ||
-      target.tagName === "TBODY"
+      target.classList.contains("torrent-rows") ||
+      target.classList.contains("torrent-list-container")
     ) {
       onSelect(null);
     }
   };
 
+  if (torrents.length === 0) {
+    return (
+      <div className="torrent-list-container">
+        <div className="empty-state">
+          <Icons.Download />
+          <h3>No torrents yet</h3>
+          <p>Add a .torrent file or paste a magnet link to get started.</p>
+          <button className="btn-primary" onClick={onAddClick}>
+            <Icons.Add />
+            Add torrent
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="torrent-list-container" onClick={handleContainerClick}>
-      <table className="torrent-table">
-        <thead>
-          <tr>
-            <th className="col-name">Name</th>
-            <th className="col-size">Size</th>
-            <th className="col-progress">Progress</th>
-            <th className="col-status">Status</th>
-            <th className="col-seeds">Seeds</th>
-            <th className="col-peers">Peers</th>
-            <th className="col-down">Down Speed</th>
-            <th className="col-up">Up Speed</th>
-            <th className="col-eta">ETA</th>
-          </tr>
-        </thead>
-        <tbody>
-          {torrents.length === 0 ? (
-            <tr className="empty-row">
-              <td colSpan={TORRENT_TABLE_COLUMNS}>
-                <div className="empty-state">
-                  <p>No torrents</p>
-                  <button className="btn-primary" onClick={onAddClick}>
-                    Add your first torrent
-                  </button>
-                </div>
-              </td>
-            </tr>
-          ) : (
-            torrents.map((torrent) => (
-              <tr
-                key={torrent.info_hash}
-                className={selectedTorrent === torrent.info_hash ? "selected" : ""}
-                onClick={() => onSelect(torrent.info_hash)}
-                onDoubleClick={() => onDoubleClick(torrent)}
-              >
-                <td className="col-name">
-                  <div className="torrent-name-cell">
-                    {useStatusIndicators ? (
-                      <StatusIndicator
-                        status={torrent.state}
-                        showLabel={false}
-                        speed={getRelevantSpeed(torrent)}
-                      />
-                    ) : (
-                      <span
-                        className={`state-icon ${isChecking(torrent.state) ? "spinning" : ""}`}
-                        style={{ color: getStateColor(torrent.state) }}
-                      >
-                        {getStateIcon(torrent.state)}
-                      </span>
-                    )}
-                    <span className="torrent-name" title={torrent.name}>
-                      {torrent.name}
+    <div className="torrent-list-container" onClick={handleBackgroundClick}>
+      <div className="list-toolbar">
+        <span className="list-count">
+          {torrents.length === 1 ? "1 torrent" : `${torrents.length} torrents`}
+        </span>
+        <div className="sort-control">
+          <span>Sort by</span>
+          <select
+            value={sortKey}
+            onChange={(e) => changeSort(e.target.value as SortKey)}
+          >
+            {(Object.keys(SORT_LABELS) as SortKey[]).map((key) => (
+              <option key={key} value={key}>
+                {SORT_LABELS[key]}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div className="torrent-rows" onClick={handleBackgroundClick}>
+        {sorted.map((torrent) => {
+          const pill = pillFor(torrent.state);
+          return (
+            <div
+              key={torrent.info_hash}
+              className={`torrent-row ${
+                selectedTorrent === torrent.info_hash ? "selected" : ""
+              }`}
+              tabIndex={0}
+              onClick={() => onSelect(torrent.info_hash)}
+              onDoubleClick={() => onDoubleClick(torrent)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onSelect(torrent.info_hash);
+                }
+              }}
+            >
+              <div className="row-top">
+                <span className="torrent-name" title={torrent.name}>
+                  {torrent.name}
+                </span>
+                <span className="row-speeds">
+                  {torrent.download_rate > 0 && (
+                    <span className="speed-down">
+                      ↓ {formatSpeed(torrent.download_rate)}
                     </span>
-                  </div>
-                </td>
-                <td className="col-size">{formatBytes(torrent.total_size)}</td>
-                <td className="col-progress">
-                  <div className="progress-cell">
-                    <div className="progress-bar-container">
-                      <div
-                        className="progress-bar"
-                        style={{
-                          width: `${torrent.progress}%`,
-                          backgroundColor: getStateColor(torrent.state),
-                        }}
-                      />
-                    </div>
-                    <span className="progress-text">{torrent.progress.toFixed(1)}%</span>
-                  </div>
-                </td>
-                <td className="col-status" style={{ color: getStateColor(torrent.state) }}>
+                  )}
+                  {torrent.upload_rate > 0 && (
+                    <span className="speed-up">
+                      ↑ {formatSpeed(torrent.upload_rate)}
+                    </span>
+                  )}
+                </span>
+              </div>
+
+              <div className="row-progress">
+                <div className="progress-track">
+                  <div
+                    className={`progress-fill ${fillFor(torrent.state)}`}
+                    style={{ width: `${Math.min(torrent.progress, 100)}%` }}
+                  />
+                </div>
+                <span className="progress-pct">
+                  {torrent.progress.toFixed(1)}%
+                </span>
+              </div>
+
+              <div className="row-meta">
+                <span className={`state-pill ${pill.cls} ${pill.pulse ? "pulse" : ""}`}>
+                  <i className="pill-dot" />
                   {formatState(torrent.state)}
-                </td>
-                <td className="col-seeds">{torrent.seeds}</td>
-                <td className="col-peers">{torrent.peers}</td>
-                <td className="col-down">
-                  {torrent.download_rate > 0 ? formatSpeed(torrent.download_rate) : "-"}
-                </td>
-                <td className="col-up">
-                  {torrent.upload_rate > 0 ? formatSpeed(torrent.upload_rate) : "-"}
-                </td>
-                <td className="col-eta">
-                  {isDownloading(torrent.state) && torrent.download_rate > 0 && torrent.total_size > 0
-                    ? formatEta(torrent.downloaded, torrent.total_size, torrent.download_rate)
-                    : "-"}
-                </td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
+                </span>
+                <span className="meta-text">{metaLine(torrent)}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
