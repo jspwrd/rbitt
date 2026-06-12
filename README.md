@@ -85,10 +85,15 @@ bun run tauri build
 
 ## Configuration
 
-Settings are stored in the platform-specific config directory:
+Settings, the torrent session, and per-torrent metadata are stored in the
+platform-specific config directory and restored on startup:
 - Linux: `~/.config/rbitt/`
-- macOS: `~/Library/Application Support/com.rbitt.dev/`
+- macOS: `~/Library/Application Support/rbitt/`
 - Windows: `%APPDATA%\rbitt\`
+
+Contents: `settings.json` (engine configuration, categories, RSS, watch
+folders), `session.json` (torrent list and state), and `torrents/` (per-torrent
+info dictionaries used to restore the session).
 
 ## Development
 
