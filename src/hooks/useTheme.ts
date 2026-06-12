@@ -1,12 +1,16 @@
 import { useState, useEffect, useCallback } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { ACCENTS, themeById } from "../themes";
 import type { ThemeMode } from "../types";
 
 const THEME_STORAGE_KEY = "theme";
+const ACCENT_STORAGE_KEY = "accent";
 
-function getSystemTheme(): "light" | "dark" {
+function getSystemBase(): "light" | "dark" {
   if (typeof window !== "undefined" && window.matchMedia) {
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    return window.matchMedia("(prefers-color-scheme: dark)").matches
+      ? "dark"
+      : "light";
   }
   return "dark";
 }
@@ -14,21 +18,42 @@ function getSystemTheme(): "light" | "dark" {
 function getStoredTheme(): ThemeMode {
   if (typeof window !== "undefined") {
     const stored = localStorage.getItem(THEME_STORAGE_KEY);
-    if (stored === "light" || stored === "dark" || stored === "system") {
-      return stored;
-    }
+    if (stored === "system") return "system";
+    // Accepts both legacy values ("light"/"dark") and preset theme ids.
+    if (stored && themeById(stored)) return stored;
   }
   return "system";
 }
 
-async function applyTheme(theme: ThemeMode) {
-  const effectiveTheme = theme === "system" ? getSystemTheme() : theme;
-  document.documentElement.setAttribute("data-theme", effectiveTheme);
+function getStoredAccent(): string {
+  if (typeof window !== "undefined") {
+    const stored = localStorage.getItem(ACCENT_STORAGE_KEY);
+    if (stored && ACCENTS.some((a) => a.id === stored)) return stored;
+  }
+  return "auto";
+}
 
-  // Set the Tauri window titlebar theme
-  // null = follow system, "light" or "dark" = explicit theme
+/** "system" follows the OS between the built-in dark/light pair. */
+function resolveThemeId(mode: ThemeMode): string {
+  return mode === "system" ? getSystemBase() : mode;
+}
+
+async function applyTheme(mode: ThemeMode, accent: string) {
+  const def = themeById(resolveThemeId(mode)) ?? themeById("dark")!;
+  const root = document.documentElement;
+
+  root.setAttribute("data-theme", def.id);
+  // Drives base-dependent CSS (accent override variants, light shadows).
+  root.setAttribute("data-base", def.base);
+  if (accent === "auto") {
+    root.removeAttribute("data-accent");
+  } else {
+    root.setAttribute("data-accent", accent);
+  }
+
+  // Native titlebar: follow the system, or pin to the theme's base mode.
   try {
-    const tauriTheme = theme === "system" ? null : effectiveTheme;
+    const tauriTheme = mode === "system" ? null : def.base;
     await getCurrentWindow().setTheme(tauriTheme);
   } catch (e) {
     console.error("Failed to set window theme:", e);
@@ -37,33 +62,41 @@ async function applyTheme(theme: ThemeMode) {
 
 export function useTheme() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(getStoredTheme);
+  const [accent, setAccentState] = useState<string>(getStoredAccent);
 
-  // Apply theme on mount and when themeMode changes
   useEffect(() => {
-    applyTheme(themeMode);
+    applyTheme(themeMode, accent);
     localStorage.setItem(THEME_STORAGE_KEY, themeMode);
-  }, [themeMode]);
+    localStorage.setItem(ACCENT_STORAGE_KEY, accent);
+  }, [themeMode, accent]);
 
-  // Listen for system theme changes when in system mode
+  // Track OS appearance changes while in system mode
   useEffect(() => {
     if (themeMode !== "system") return;
 
     const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
     const handleChange = () => {
-      applyTheme("system");
+      applyTheme("system", accent);
     };
 
     mediaQuery.addEventListener("change", handleChange);
     return () => mediaQuery.removeEventListener("change", handleChange);
-  }, [themeMode]);
+  }, [themeMode, accent]);
 
   const setTheme = useCallback((mode: ThemeMode) => {
     setThemeMode(mode);
   }, []);
 
+  const setAccent = useCallback((value: string) => {
+    setAccentState(value);
+  }, []);
+
   return {
     themeMode,
     setTheme,
-    effectiveTheme: themeMode === "system" ? getSystemTheme() : themeMode,
+    accent,
+    setAccent,
+    effectiveTheme: (themeById(resolveThemeId(themeMode)) ?? themeById("dark")!)
+      .base,
   };
 }

@@ -233,5 +233,5 @@ export interface ExternalProgramSettingsInfo {
   on_completion_command: string | null;
 }
 
-// Theme Settings
-export type ThemeMode = "light" | "dark" | "system";
+// Theme Settings: "system" or a theme id from src/themes.ts
+export type ThemeMode = string;

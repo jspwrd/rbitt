@@ -1,0 +1,562 @@
+/* ============================================================
+   Theme presets
+   Each block maps a community palette onto the design tokens in
+   App.css. Themes only override tokens; components never change.
+   Registry: src/themes.ts ("dark" and "light" live in App.css).
+   ============================================================ */
+
+/* Light-base themes share the softer elevation set. */
+[data-base="light"] {
+  --shadow-sm: 0 1px 2px rgba(25, 25, 35, 0.07);
+  --shadow-md: 0 4px 12px rgba(25, 25, 35, 0.09), 0 1px 3px rgba(25, 25, 35, 0.07);
+  --shadow-lg:
+    0 24px 60px rgba(25, 25, 35, 0.18),
+    0 8px 20px rgba(25, 25, 35, 0.1),
+    0 0 0 1px rgba(20, 20, 30, 0.05);
+}
+
+/* ---------------------------------------------------------- */
+/* Catppuccin Mocha — https://catppuccin.com                   */
+/* ---------------------------------------------------------- */
+[data-theme="catppuccin-mocha"] {
+  --bg-app: #181825;
+  --bg-surface: #1e1e2e;
+  --bg-raised: #2a2a3d;
+  --bg-overlay: #2c2c40;
+  --bg-input: #2a2a3d;
+  --bg-hover: rgba(205, 214, 244, 0.055);
+  --bg-active: rgba(205, 214, 244, 0.1);
+  --bg-selected: rgba(203, 166, 247, 0.13);
+  --bg-selected-hover: rgba(203, 166, 247, 0.18);
+
+  --text-primary: #cdd6f4;
+  --text-secondary: #a6adc8;
+  --text-muted: #6c7086;
+  --text-tertiary: #9399b2;
+  --text-on-accent: #11111b;
+
+  --border-color: rgba(205, 214, 244, 0.09);
+  --border-light: rgba(205, 214, 244, 0.15);
+  --border-input: rgba(205, 214, 244, 0.14);
+
+  --accent: #cba6f7;
+  --accent-hover: #d7bafa;
+  --accent-active: #b78fe8;
+  --accent-text: #cba6f7;
+  --accent-tint: rgba(203, 166, 247, 0.14);
+
+  --danger: #f38ba8;
+  --danger-hover: #f06c92;
+  --danger-tint: rgba(243, 139, 168, 0.13);
+  --success: #a6e3a1;
+  --warning: #fab387;
+
+  --state-downloading: #89b4fa;
+  --state-seeding: #94e2d5;
+  --state-completed: #a6e3a1;
+  --state-paused: #9399b2;
+  --state-checking: #fab387;
+  --state-error: #f38ba8;
+  --state-stalled: #f9e2af;
+  --state-active: #a6e3a1;
+  --state-inactive: #9399b2;
+  --state-moving: #cba6f7;
+  --state-metadata: #89dceb;
+  --state-queued: #9399b2;
+
+  --tint-downloading: rgba(137, 180, 250, 0.13);
+  --tint-seeding: rgba(148, 226, 213, 0.12);
+  --tint-completed: rgba(166, 227, 161, 0.12);
+  --tint-paused: rgba(147, 153, 178, 0.12);
+  --tint-checking: rgba(250, 179, 135, 0.13);
+  --tint-error: rgba(243, 139, 168, 0.13);
+  --tint-stalled: rgba(249, 226, 175, 0.12);
+  --tint-moving: rgba(203, 166, 247, 0.13);
+  --tint-metadata: rgba(137, 220, 235, 0.12);
+  --tint-queued: rgba(147, 153, 178, 0.12);
+}
+
+/* ---------------------------------------------------------- */
+/* Catppuccin Latte                                            */
+/* ---------------------------------------------------------- */
+[data-theme="catppuccin-latte"] {
+  --bg-app: #e6e9ef;
+  --bg-surface: #eff1f5;
+  --bg-raised: #ffffff;
+  --bg-overlay: #fbfcfe;
+  --bg-input: #ffffff;
+  --bg-hover: rgba(76, 79, 105, 0.055);
+  --bg-active: rgba(76, 79, 105, 0.1);
+  --bg-selected: rgba(136, 57, 239, 0.1);
+  --bg-selected-hover: rgba(136, 57, 239, 0.15);
+
+  --text-primary: #4c4f69;
+  --text-secondary: #6c6f85;
+  --text-muted: #9ca0b0;
+  --text-tertiary: #7c7f93;
+  --text-on-accent: #ffffff;
+
+  --border-color: rgba(76, 79, 105, 0.12);
+  --border-light: rgba(76, 79, 105, 0.18);
+  --border-input: rgba(76, 79, 105, 0.2);
+
+  --accent: #8839ef;
+  --accent-hover: #7426dd;
+  --accent-active: #651cc4;
+  --accent-text: #8839ef;
+  --accent-tint: rgba(136, 57, 239, 0.1);
+
+  --danger: #d20f39;
+  --danger-hover: #b80b31;
+  --danger-tint: rgba(210, 15, 57, 0.09);
+  --success: #40a02b;
+  --warning: #fe640b;
+
+  --state-downloading: #1e66f5;
+  --state-seeding: #179299;
+  --state-completed: #40a02b;
+  --state-paused: #7c7f93;
+  --state-checking: #fe640b;
+  --state-error: #d20f39;
+  --state-stalled: #df8e1d;
+  --state-active: #40a02b;
+  --state-inactive: #7c7f93;
+  --state-moving: #8839ef;
+  --state-metadata: #04a5e5;
+  --state-queued: #7c7f93;
+
+  --tint-downloading: rgba(30, 102, 245, 0.1);
+  --tint-seeding: rgba(23, 146, 153, 0.1);
+  --tint-completed: rgba(64, 160, 43, 0.1);
+  --tint-paused: rgba(124, 127, 147, 0.1);
+  --tint-checking: rgba(254, 100, 11, 0.1);
+  --tint-error: rgba(210, 15, 57, 0.09);
+  --tint-stalled: rgba(223, 142, 29, 0.11);
+  --tint-moving: rgba(136, 57, 239, 0.1);
+  --tint-metadata: rgba(4, 165, 229, 0.1);
+  --tint-queued: rgba(124, 127, 147, 0.1);
+}
+
+/* ---------------------------------------------------------- */
+/* Tokyo Night — https://github.com/enkia/tokyo-night-vscode   */
+/* ---------------------------------------------------------- */
+[data-theme="tokyo-night"] {
+  --bg-app: #16161e;
+  --bg-surface: #1a1b26;
+  --bg-raised: #24253a;
+  --bg-overlay: #262738;
+  --bg-input: #24253a;
+  --bg-hover: rgba(192, 202, 245, 0.05);
+  --bg-active: rgba(192, 202, 245, 0.09);
+  --bg-selected: rgba(122, 162, 247, 0.13);
+  --bg-selected-hover: rgba(122, 162, 247, 0.18);
+
+  --text-primary: #c0caf5;
+  --text-secondary: #a9b1d6;
+  --text-muted: #565f89;
+  --text-tertiary: #737aa2;
+  --text-on-accent: #16161e;
+
+  --border-color: rgba(192, 202, 245, 0.08);
+  --border-light: rgba(192, 202, 245, 0.14);
+  --border-input: rgba(192, 202, 245, 0.13);
+
+  --accent: #7aa2f7;
+  --accent-hover: #94b5f9;
+  --accent-active: #6690e8;
+  --accent-text: #7aa2f7;
+  --accent-tint: rgba(122, 162, 247, 0.14);
+
+  --danger: #f7768e;
+  --danger-hover: #f55c79;
+  --danger-tint: rgba(247, 118, 142, 0.12);
+  --success: #9ece6a;
+  --warning: #e0af68;
+
+  --state-downloading: #7aa2f7;
+  --state-seeding: #1abc9c;
+  --state-completed: #9ece6a;
+  --state-paused: #737aa2;
+  --state-checking: #ff9e64;
+  --state-error: #f7768e;
+  --state-stalled: #e0af68;
+  --state-active: #9ece6a;
+  --state-inactive: #737aa2;
+  --state-moving: #bb9af7;
+  --state-metadata: #7dcfff;
+  --state-queued: #737aa2;
+
+  --tint-downloading: rgba(122, 162, 247, 0.13);
+  --tint-seeding: rgba(26, 188, 156, 0.12);
+  --tint-completed: rgba(158, 206, 106, 0.12);
+  --tint-paused: rgba(115, 122, 162, 0.13);
+  --tint-checking: rgba(255, 158, 100, 0.13);
+  --tint-error: rgba(247, 118, 142, 0.12);
+  --tint-stalled: rgba(224, 175, 104, 0.13);
+  --tint-moving: rgba(187, 154, 247, 0.13);
+  --tint-metadata: rgba(125, 207, 255, 0.12);
+  --tint-queued: rgba(115, 122, 162, 0.13);
+}
+
+/* ---------------------------------------------------------- */
+/* Nord — https://nordtheme.com                                */
+/* ---------------------------------------------------------- */
+[data-theme="nord"] {
+  --bg-app: #272c36;
+  --bg-surface: #2e3440;
+  --bg-raised: #3b4252;
+  --bg-overlay: #3b4252;
+  --bg-input: #3b4252;
+  --bg-hover: rgba(236, 239, 244, 0.05);
+  --bg-active: rgba(236, 239, 244, 0.09);
+  --bg-selected: rgba(136, 192, 208, 0.13);
+  --bg-selected-hover: rgba(136, 192, 208, 0.18);
+
+  --text-primary: #eceff4;
+  --text-secondary: #d8dee9;
+  --text-muted: #717d92;
+  --text-tertiary: #95a1b5;
+  --text-on-accent: #2e3440;
+
+  --border-color: rgba(216, 222, 233, 0.09);
+  --border-light: rgba(216, 222, 233, 0.16);
+  --border-input: rgba(216, 222, 233, 0.15);
+
+  --accent: #88c0d0;
+  --accent-hover: #9ccddb;
+  --accent-active: #74b3c5;
+  --accent-text: #88c0d0;
+  --accent-tint: rgba(136, 192, 208, 0.13);
+
+  --danger: #bf616a;
+  --danger-hover: #b3555e;
+  --danger-tint: rgba(191, 97, 106, 0.14);
+  --success: #a3be8c;
+  --warning: #ebcb8b;
+
+  --state-downloading: #81a1c1;
+  --state-seeding: #8fbcbb;
+  --state-completed: #a3be8c;
+  --state-paused: #95a1b5;
+  --state-checking: #d08770;
+  --state-error: #bf616a;
+  --state-stalled: #ebcb8b;
+  --state-active: #a3be8c;
+  --state-inactive: #95a1b5;
+  --state-moving: #b48ead;
+  --state-metadata: #88c0d0;
+  --state-queued: #95a1b5;
+
+  --tint-downloading: rgba(129, 161, 193, 0.14);
+  --tint-seeding: rgba(143, 188, 187, 0.13);
+  --tint-completed: rgba(163, 190, 140, 0.13);
+  --tint-paused: rgba(149, 161, 181, 0.12);
+  --tint-checking: rgba(208, 135, 112, 0.14);
+  --tint-error: rgba(191, 97, 106, 0.15);
+  --tint-stalled: rgba(235, 203, 139, 0.13);
+  --tint-moving: rgba(180, 142, 173, 0.14);
+  --tint-metadata: rgba(136, 192, 208, 0.13);
+  --tint-queued: rgba(149, 161, 181, 0.12);
+}
+
+/* ---------------------------------------------------------- */
+/* Dracula — https://draculatheme.com                          */
+/* ---------------------------------------------------------- */
+[data-theme="dracula"] {
+  --bg-app: #21222c;
+  --bg-surface: #282a36;
+  --bg-raised: #343746;
+  --bg-overlay: #363949;
+  --bg-input: #343746;
+  --bg-hover: rgba(248, 248, 242, 0.05);
+  --bg-active: rgba(248, 248, 242, 0.09);
+  --bg-selected: rgba(189, 147, 249, 0.13);
+  --bg-selected-hover: rgba(189, 147, 249, 0.18);
+
+  --text-primary: #f8f8f2;
+  --text-secondary: #c3c5d4;
+  --text-muted: #6272a4;
+  --text-tertiary: #9aa3c7;
+  --text-on-accent: #21222c;
+
+  --border-color: rgba(248, 248, 242, 0.08);
+  --border-light: rgba(248, 248, 242, 0.14);
+  --border-input: rgba(248, 248, 242, 0.13);
+
+  --accent: #bd93f9;
+  --accent-hover: #cca8fa;
+  --accent-active: #a87df0;
+  --accent-text: #bd93f9;
+  --accent-tint: rgba(189, 147, 249, 0.13);
+
+  --danger: #ff5555;
+  --danger-hover: #f54040;
+  --danger-tint: rgba(255, 85, 85, 0.12);
+  --success: #50fa7b;
+  --warning: #ffb86c;
+
+  --state-downloading: #bd93f9;
+  --state-seeding: #8be9fd;
+  --state-completed: #50fa7b;
+  --state-paused: #9aa3c7;
+  --state-checking: #ffb86c;
+  --state-error: #ff5555;
+  --state-stalled: #f1fa8c;
+  --state-active: #50fa7b;
+  --state-inactive: #9aa3c7;
+  --state-moving: #ff79c6;
+  --state-metadata: #8be9fd;
+  --state-queued: #9aa3c7;
+
+  --tint-downloading: rgba(189, 147, 249, 0.13);
+  --tint-seeding: rgba(139, 233, 253, 0.11);
+  --tint-completed: rgba(80, 250, 123, 0.11);
+  --tint-paused: rgba(154, 163, 199, 0.12);
+  --tint-checking: rgba(255, 184, 108, 0.12);
+  --tint-error: rgba(255, 85, 85, 0.12);
+  --tint-stalled: rgba(241, 250, 140, 0.1);
+  --tint-moving: rgba(255, 121, 198, 0.12);
+  --tint-metadata: rgba(139, 233, 253, 0.11);
+  --tint-queued: rgba(154, 163, 199, 0.12);
+}
+
+/* ---------------------------------------------------------- */
+/* Gruvbox Dark — https://github.com/morhetz/gruvbox           */
+/* ---------------------------------------------------------- */
+[data-theme="gruvbox-dark"] {
+  --bg-app: #1d2021;
+  --bg-surface: #282828;
+  --bg-raised: #3c3836;
+  --bg-overlay: #3c3836;
+  --bg-input: #3c3836;
+  --bg-hover: rgba(235, 219, 178, 0.05);
+  --bg-active: rgba(235, 219, 178, 0.09);
+  --bg-selected: rgba(131, 165, 152, 0.14);
+  --bg-selected-hover: rgba(131, 165, 152, 0.2);
+
+  --text-primary: #ebdbb2;
+  --text-secondary: #d5c4a1;
+  --text-muted: #7c6f64;
+  --text-tertiary: #a89984;
+  --text-on-accent: #1d2021;
+
+  --border-color: rgba(235, 219, 178, 0.09);
+  --border-light: rgba(235, 219, 178, 0.16);
+  --border-input: rgba(235, 219, 178, 0.15);
+
+  --accent: #83a598;
+  --accent-hover: #94b3a7;
+  --accent-active: #6f9388;
+  --accent-text: #83a598;
+  --accent-tint: rgba(131, 165, 152, 0.14);
+
+  --danger: #fb4934;
+  --danger-hover: #f0321c;
+  --danger-tint: rgba(251, 73, 52, 0.13);
+  --success: #b8bb26;
+  --warning: #fabd2f;
+
+  --state-downloading: #83a598;
+  --state-seeding: #8ec07c;
+  --state-completed: #b8bb26;
+  --state-paused: #a89984;
+  --state-checking: #fe8019;
+  --state-error: #fb4934;
+  --state-stalled: #fabd2f;
+  --state-active: #b8bb26;
+  --state-inactive: #a89984;
+  --state-moving: #d3869b;
+  --state-metadata: #83a598;
+  --state-queued: #a89984;
+
+  --tint-downloading: rgba(131, 165, 152, 0.14);
+  --tint-seeding: rgba(142, 192, 124, 0.13);
+  --tint-completed: rgba(184, 187, 38, 0.12);
+  --tint-paused: rgba(168, 153, 132, 0.12);
+  --tint-checking: rgba(254, 128, 25, 0.13);
+  --tint-error: rgba(251, 73, 52, 0.13);
+  --tint-stalled: rgba(250, 189, 47, 0.13);
+  --tint-moving: rgba(211, 134, 155, 0.14);
+  --tint-metadata: rgba(131, 165, 152, 0.14);
+  --tint-queued: rgba(168, 153, 132, 0.12);
+}
+
+/* ============================================================
+   Accent overrides
+   Apply on top of any theme via data-accent on <html>. The
+   [data-base] variants keep contrast correct per base mode.
+   These come after the theme blocks, and the two-attribute
+   selectors outweigh single-attribute theme blocks.
+   ============================================================ */
+
+[data-base][data-accent] {
+  --accent-color: var(--accent);
+}
+
+[data-base="dark"][data-accent="indigo"] {
+  --accent: #6a6ef5;
+  --accent-hover: #7d81f7;
+  --accent-active: #585cd9;
+  --accent-text: #9395f8;
+  --accent-tint: rgba(106, 110, 245, 0.14);
+  --bg-selected: rgba(106, 110, 245, 0.13);
+  --bg-selected-hover: rgba(106, 110, 245, 0.18);
+  --text-on-accent: #ffffff;
+}
+[data-base="light"][data-accent="indigo"] {
+  --accent: #5559e6;
+  --accent-hover: #4549d4;
+  --accent-active: #3a3ec2;
+  --accent-text: #4d51dd;
+  --accent-tint: rgba(85, 89, 230, 0.1);
+  --bg-selected: rgba(85, 89, 230, 0.1);
+  --bg-selected-hover: rgba(85, 89, 230, 0.15);
+  --text-on-accent: #ffffff;
+}
+
+[data-base="dark"][data-accent="blue"] {
+  --accent: #3f8cf3;
+  --accent-hover: #5c9ef5;
+  --accent-active: #2f78dd;
+  --accent-text: #6fa9f7;
+  --accent-tint: rgba(63, 140, 243, 0.14);
+  --bg-selected: rgba(63, 140, 243, 0.13);
+  --bg-selected-hover: rgba(63, 140, 243, 0.18);
+  --text-on-accent: #ffffff;
+}
+[data-base="light"][data-accent="blue"] {
+  --accent: #2674e0;
+  --accent-hover: #1d63c6;
+  --accent-active: #1754ab;
+  --accent-text: #1f68cf;
+  --accent-tint: rgba(38, 116, 224, 0.1);
+  --bg-selected: rgba(38, 116, 224, 0.1);
+  --bg-selected-hover: rgba(38, 116, 224, 0.15);
+  --text-on-accent: #ffffff;
+}
+
+[data-base="dark"][data-accent="violet"] {
+  --accent: #8b5cf6;
+  --accent-hover: #9d75f8;
+  --accent-active: #7a48e3;
+  --accent-text: #ab8af9;
+  --accent-tint: rgba(139, 92, 246, 0.14);
+  --bg-selected: rgba(139, 92, 246, 0.13);
+  --bg-selected-hover: rgba(139, 92, 246, 0.18);
+  --text-on-accent: #ffffff;
+}
+[data-base="light"][data-accent="violet"] {
+  --accent: #7c3aed;
+  --accent-hover: #6d2bd8;
+  --accent-active: #5e21c2;
+  --accent-text: #7434e3;
+  --accent-tint: rgba(124, 58, 237, 0.1);
+  --bg-selected: rgba(124, 58, 237, 0.1);
+  --bg-selected-hover: rgba(124, 58, 237, 0.15);
+  --text-on-accent: #ffffff;
+}
+
+[data-base="dark"][data-accent="magenta"] {
+  --accent: #d946ef;
+  --accent-hover: #e164f3;
+  --accent-active: #c233d8;
+  --accent-text: #e679f5;
+  --accent-tint: rgba(217, 70, 239, 0.14);
+  --bg-selected: rgba(217, 70, 239, 0.13);
+  --bg-selected-hover: rgba(217, 70, 239, 0.18);
+  --text-on-accent: #ffffff;
+}
+[data-base="light"][data-accent="magenta"] {
+  --accent: #c026d3;
+  --accent-hover: #a91dba;
+  --accent-active: #9314a3;
+  --accent-text: #b121c4;
+  --accent-tint: rgba(192, 38, 211, 0.1);
+  --bg-selected: rgba(192, 38, 211, 0.1);
+  --bg-selected-hover: rgba(192, 38, 211, 0.15);
+  --text-on-accent: #ffffff;
+}
+
+[data-base="dark"][data-accent="rose"] {
+  --accent: #f43f5e;
+  --accent-hover: #f65d77;
+  --accent-active: #de2c4b;
+  --accent-text: #f87b90;
+  --accent-tint: rgba(244, 63, 94, 0.14);
+  --bg-selected: rgba(244, 63, 94, 0.13);
+  --bg-selected-hover: rgba(244, 63, 94, 0.18);
+  --text-on-accent: #ffffff;
+}
+[data-base="light"][data-accent="rose"] {
+  --accent: #e11d48;
+  --accent-hover: #c8163e;
+  --accent-active: #af1036;
+  --accent-text: #d31843;
+  --accent-tint: rgba(225, 29, 72, 0.1);
+  --bg-selected: rgba(225, 29, 72, 0.1);
+  --bg-selected-hover: rgba(225, 29, 72, 0.15);
+  --text-on-accent: #ffffff;
+}
+
+[data-base="dark"][data-accent="orange"] {
+  --accent: #f97316;
+  --accent-hover: #fa8b3f;
+  --accent-active: #e2620a;
+  --accent-text: #fb9d5b;
+  --accent-tint: rgba(249, 115, 22, 0.14);
+  --bg-selected: rgba(249, 115, 22, 0.13);
+  --bg-selected-hover: rgba(249, 115, 22, 0.18);
+  --text-on-accent: #ffffff;
+}
+[data-base="light"][data-accent="orange"] {
+  --accent: #ea580c;
+  --accent-hover: #d14e08;
+  --accent-active: #b84505;
+  --accent-text: #dd5309;
+  --accent-tint: rgba(234, 88, 12, 0.1);
+  --bg-selected: rgba(234, 88, 12, 0.1);
+  --bg-selected-hover: rgba(234, 88, 12, 0.15);
+  --text-on-accent: #ffffff;
+}
+
+[data-base="dark"][data-accent="green"] {
+  --accent: #22c55e;
+  --accent-hover: #41d176;
+  --accent-active: #1aad50;
+  --accent-text: #5cd986;
+  --accent-tint: rgba(34, 197, 94, 0.14);
+  --bg-selected: rgba(34, 197, 94, 0.13);
+  --bg-selected-hover: rgba(34, 197, 94, 0.18);
+  --text-on-accent: #ffffff;
+}
+[data-base="light"][data-accent="green"] {
+  --accent: #16a34a;
+  --accent-hover: #11903f;
+  --accent-active: #0d7d35;
+  --accent-text: #129944;
+  --accent-tint: rgba(22, 163, 74, 0.1);
+  --bg-selected: rgba(22, 163, 74, 0.1);
+  --bg-selected-hover: rgba(22, 163, 74, 0.15);
+  --text-on-accent: #ffffff;
+}
+
+[data-base="dark"][data-accent="teal"] {
+  --accent: #14b8a6;
+  --accent-hover: #2cc5b4;
+  --accent-active: #0ca293;
+  --accent-text: #4bcfbf;
+  --accent-tint: rgba(20, 184, 166, 0.14);
+  --bg-selected: rgba(20, 184, 166, 0.13);
+  --bg-selected-hover: rgba(20, 184, 166, 0.18);
+  --text-on-accent: #ffffff;
+}
+[data-base="light"][data-accent="teal"] {
+  --accent: #0d9488;
+  --accent-hover: #0a8074;
+  --accent-active: #086d63;
+  --accent-text: #0b8a7e;
+  --accent-tint: rgba(13, 148, 136, 0.1);
+  --bg-selected: rgba(13, 148, 136, 0.1);
+  --bg-selected-hover: rgba(13, 148, 136, 0.15);
+  --text-on-accent: #ffffff;
+}
