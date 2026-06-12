@@ -23,6 +23,12 @@ pub enum EngineError {
     #[error("torrent not found: {0}")]
     NotFound(String),
 
+    #[error("torrent already added: {0}")]
+    Duplicate(String),
+
+    #[error("BitTorrent v2-only torrents are not supported yet (no v1 info hash)")]
+    UnsupportedV2Only,
+
     #[allow(dead_code)]
     #[error("global connection limit reached (limit: {limit})")]
     TooManyConnections { limit: usize },

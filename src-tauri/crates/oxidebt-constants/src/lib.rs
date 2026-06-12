@@ -131,9 +131,18 @@ pub const CHOKING_INTERVAL: Duration = Duration::from_secs(10);
 
 pub const OPTIMISTIC_UNCHOKE_INTERVAL: Duration = Duration::from_secs(30);
 
+/// How often the background reannounce task evaluates whether torrents need
+/// a tracker/DHT reannounce (the per-torrent intervals gate the actual work).
+pub const REANNOUNCE_CHECK_INTERVAL: Duration = Duration::from_secs(30);
+
 pub const PEER_RETRY_BASE_DELAY: Duration = Duration::from_secs(60);
 
 pub const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(120);
+
+/// How often a peer task wakes to run periodic work (keepalive check, PEX,
+/// enacting choke/unchoke decisions). Must be well under CHOKING_INTERVAL so
+/// choke rounds reach the wire promptly; the work itself is rate-guarded.
+pub const PEER_TICK_INTERVAL: Duration = Duration::from_secs(5);
 
 pub const LSD_ANNOUNCE_INTERVAL: Duration = Duration::from_secs(300);
 

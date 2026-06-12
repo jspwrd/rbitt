@@ -18,10 +18,12 @@ pub enum PeerEvent {
     },
     BlockReceived {
         torrent_hash: String,
+        peer_addr: SocketAddr,
         size: u64,
     },
     BlockSent {
         torrent_hash: String,
+        peer_addr: SocketAddr,
         size: u64,
     },
     PeerBitfield {

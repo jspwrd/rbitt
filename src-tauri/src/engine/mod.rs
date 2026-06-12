@@ -3,6 +3,7 @@ mod events;
 mod metadata;
 mod peer_connection;
 mod peer_info;
+pub mod persistence;
 mod pex;
 pub mod rss;
 pub mod search;
@@ -21,14 +22,14 @@ pub use torrent::TorrentState;
 use events::PeerEvent;
 use metadata::fetch_metadata_from_peers;
 use oxidebt_constants::{
-    CHECKING_SLEEP_INTERVAL, CONNECTION_RETRY_SLEEP, CONNECTION_TIMEOUT, DEFAULT_PORT,
-    DHT_INTERVAL_CRITICAL, DHT_INTERVAL_HIGH, DHT_INTERVAL_LOW, DHT_INTERVAL_MEDIUM,
+    CHECKING_SLEEP_INTERVAL, CHOKING_INTERVAL, CONNECTION_RETRY_SLEEP, CONNECTION_TIMEOUT,
+    DEFAULT_PORT, DHT_INTERVAL_CRITICAL, DHT_INTERVAL_HIGH, DHT_INTERVAL_LOW, DHT_INTERVAL_MEDIUM,
     DHT_QUERY_SLEEP, LOOP_INTERVAL_FAST, LOOP_INTERVAL_NORMAL, LOOP_INTERVAL_STABLE,
     LSD_ANNOUNCE_INTERVAL, MAX_GLOBAL_CONNECTIONS, MAX_HALF_OPEN, MAX_PEERS_PER_TORRENT,
     MAX_PEER_RETRY_ATTEMPTS, MAX_UNCHOKED_PEERS, OPTIMISTIC_UNCHOKE_INTERVAL,
     PAUSED_SLEEP_INTERVAL, PEER_THRESHOLD_CRITICAL, PEER_THRESHOLD_LOW, PEER_THRESHOLD_MEDIUM,
-    TRACKER_AGGRESSIVE_INTERVAL, TRACKER_ANNOUNCE_INTERVAL, TRACKER_MIN_INTERVAL,
-    TRACKER_MODERATE_INTERVAL,
+    REANNOUNCE_CHECK_INTERVAL, TRACKER_AGGRESSIVE_INTERVAL, TRACKER_ANNOUNCE_INTERVAL,
+    TRACKER_MIN_INTERVAL, TRACKER_MODERATE_INTERVAL,
 };
 use oxidebt_dht::DhtServer;
 use oxidebt_disk::{DiskManager, FileEntry, PieceInfo, TorrentStorage};
@@ -42,7 +43,7 @@ use sha1::{Digest, Sha1};
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -53,7 +54,11 @@ use tracker_info::TrackerState;
 
 use crate::TrackerStatusInfo;
 
-pub struct TorrentEngine {
+/// State shared between the engine facade and every background task.
+/// Tasks hold a single `Arc<EngineShared>` instead of a dozen individually
+/// cloned handles, and all torrent-add sources (UI, watch folders, RSS,
+/// session restore) go through `EngineShared::add_torrent`.
+pub struct EngineShared {
     peer_id: PeerId,
     download_dir: PathBuf,
     listen_port: Arc<AtomicU16>,
@@ -62,10 +67,8 @@ pub struct TorrentEngine {
     disk_manager: Arc<DiskManager>,
     bandwidth_limiter: Arc<RwLock<BandwidthLimiter>>,
     dht: Option<Arc<DhtServer>>,
-    _port_mapper: Arc<RwLock<PortMapper>>,
     lsd: Option<Arc<LsdService>>,
     event_tx: mpsc::UnboundedSender<PeerEvent>,
-    event_rx: Arc<RwLock<Option<mpsc::UnboundedReceiver<PeerEvent>>>>,
     global_connections: Arc<AtomicUsize>,
     max_active_downloads: Arc<AtomicUsize>,
     max_active_uploads: Arc<AtomicUsize>,
@@ -83,12 +86,523 @@ pub struct TorrentEngine {
     external_program_settings: Arc<RwLock<settings::ExternalProgramSettings>>,
     /// Default share limits for new torrents
     default_share_limits: Arc<RwLock<settings::ShareLimits>>,
+    /// Magnet links whose metadata is still being fetched, keyed by info
+    /// hash. Surfaced to the UI as synthetic metaDL/error entries.
+    pending_magnets: RwLock<HashMap<String, PendingMagnet>>,
+    /// Configured bandwidth limits in bytes/sec (0 = unlimited); mirrors the
+    /// limiter, which does not expose its configuration.
+    bandwidth_limits: RwLock<(u64, u64)>,
     /// Watch folder manager
     watch_manager: Arc<watch::WatchFolderManager>,
     /// RSS manager
     rss_manager: Arc<rss::RssManager>,
     /// Search engine
     search_engine: Arc<search::SearchEngine>,
+    /// Queue for the coalescing persistence writer task.
+    persist_tx: mpsc::UnboundedSender<PersistKind>,
+}
+
+/// A magnet add that does not yet have its metainfo.
+struct PendingMagnet {
+    /// Original URI, persisted so an interrupted fetch resumes next launch.
+    uri: String,
+    name: String,
+    /// Set when discovery or the metadata fetch failed; the entry then shows
+    /// as an error state in the UI until the user removes it.
+    error: Option<String>,
+}
+
+/// What needs writing to disk; bursts are coalesced by the writer task.
+#[derive(Clone, Copy)]
+enum PersistKind {
+    Settings,
+    Session,
+}
+
+/// Options applied when adding a torrent. Every add source builds one of
+/// these; defaults mirror a plain UI add into the download directory.
+#[derive(Default)]
+pub struct AddTorrentOptions {
+    /// Explicit save directory; falls back to the category's path, then the
+    /// engine download directory.
+    pub save_path: Option<PathBuf>,
+    pub category: Option<String>,
+    pub tags: Vec<String>,
+    pub add_paused: bool,
+    /// Per-torrent share limits; None applies the engine default.
+    pub share_limits: Option<settings::ShareLimits>,
+}
+
+pub struct TorrentEngine {
+    shared: Arc<EngineShared>,
+    _port_mapper: Arc<RwLock<PortMapper>>,
+    event_rx: Arc<RwLock<Option<mpsc::UnboundedReceiver<PeerEvent>>>>,
+}
+
+/// The facade derefs to the shared state so its accessor methods can read
+/// engine fields directly and call `EngineShared` methods without explicit
+/// delegation. Intentional deref-to-member: TorrentEngine is a thin app-local
+/// handle over EngineShared, not a public library type.
+impl std::ops::Deref for TorrentEngine {
+    type Target = Arc<EngineShared>;
+
+    fn deref(&self) -> &Arc<EngineShared> {
+        &self.shared
+    }
+}
+
+impl EngineShared {
+    /// Start processing watch folder events
+    fn start_watch_folder_processor(
+        self: &Arc<Self>,
+        mut rx: mpsc::UnboundedReceiver<watch::WatchEvent>,
+    ) {
+        let shared = self.clone();
+
+        tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                match event {
+                    watch::WatchEvent::TorrentFound {
+                        path,
+                        category,
+                        tags,
+                        ..
+                    } => {
+                        tracing::info!("Watch folder: Found torrent file {:?}", path);
+                        let data = match tokio::fs::read(&path).await {
+                            Ok(data) => data,
+                            Err(e) => {
+                                tracing::warn!("Watch folder: Failed to read {:?}: {}", path, e);
+                                continue;
+                            }
+                        };
+                        let meta = match Metainfo::from_bytes(&data) {
+                            Ok(meta) => meta,
+                            Err(e) => {
+                                tracing::warn!("Watch folder: Failed to parse {:?}: {}", path, e);
+                                continue;
+                            }
+                        };
+
+                        let name = meta.info.name.clone();
+                        let opts = AddTorrentOptions {
+                            category,
+                            tags,
+                            ..Default::default()
+                        };
+                        match shared.add_torrent(meta, opts).await {
+                            Ok(hash) => {
+                                tracing::info!("Watch folder: Added torrent '{}' ({})", name, hash);
+                            }
+                            Err(e) => {
+                                tracing::warn!("Watch folder: Failed to add {:?}: {}", path, e);
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /// Start processing RSS match events
+    fn start_rss_processor(self: &Arc<Self>, mut rx: mpsc::UnboundedReceiver<rss::RssMatchEvent>) {
+        let shared = self.clone();
+
+        tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                tracing::info!(
+                    "RSS: Matched '{}' from feed {} with rule {}",
+                    event.item.title,
+                    event.feed_id,
+                    event.rule_id
+                );
+
+                let torrent_url = &event.item.torrent_url;
+                let opts = AddTorrentOptions {
+                    save_path: event.save_path.as_ref().map(PathBuf::from),
+                    category: event.category.clone(),
+                    tags: event.tags.clone(),
+                    add_paused: event.add_paused,
+                    share_limits: None,
+                };
+
+                // Handle magnet links vs torrent URLs
+                if torrent_url.starts_with("magnet:") {
+                    match shared.add_magnet(torrent_url, opts).await {
+                        Ok(hash) => {
+                            tracing::info!("RSS: Added magnet {} ({})", torrent_url, hash);
+                        }
+                        Err(e) => {
+                            tracing::warn!("RSS: Failed to add magnet {}: {}", torrent_url, e);
+                        }
+                    }
+                    continue;
+                }
+
+                // Maximum torrent file size (10 MB - should be more than enough)
+                const MAX_TORRENT_FILE_SIZE: u64 = 10 * 1024 * 1024;
+
+                let response = match reqwest::get(torrent_url).await {
+                    Ok(response) => response,
+                    Err(e) => {
+                        tracing::warn!(
+                            "RSS: Failed to download torrent from {}: {}",
+                            torrent_url,
+                            e
+                        );
+                        continue;
+                    }
+                };
+
+                // Check content-length before downloading
+                if let Some(content_length) = response.content_length() {
+                    if content_length > MAX_TORRENT_FILE_SIZE {
+                        tracing::warn!(
+                            "RSS: Torrent file too large ({} bytes, max {}): {}",
+                            content_length,
+                            MAX_TORRENT_FILE_SIZE,
+                            torrent_url
+                        );
+                        continue;
+                    }
+                }
+
+                let data = match response.bytes().await {
+                    Ok(data) => data,
+                    Err(e) => {
+                        tracing::warn!("RSS: Failed to read torrent from {}: {}", torrent_url, e);
+                        continue;
+                    }
+                };
+
+                // Also check after download in case content-length was missing
+                if data.len() as u64 > MAX_TORRENT_FILE_SIZE {
+                    tracing::warn!(
+                        "RSS: Downloaded torrent file too large ({} bytes, max {}): {}",
+                        data.len(),
+                        MAX_TORRENT_FILE_SIZE,
+                        torrent_url
+                    );
+                    continue;
+                }
+
+                let meta = match Metainfo::from_bytes(&data) {
+                    Ok(meta) => meta,
+                    Err(e) => {
+                        tracing::warn!("RSS: Failed to parse torrent from {}: {}", torrent_url, e);
+                        continue;
+                    }
+                };
+
+                let name = meta.info.name.clone();
+                match shared.add_torrent(meta, opts).await {
+                    Ok(hash) => {
+                        tracing::info!("RSS: Added torrent '{}' ({})", name, hash);
+                    }
+                    Err(e) => {
+                        tracing::warn!("RSS: Failed to add torrent from {}: {}", torrent_url, e);
+                    }
+                }
+            }
+        });
+    }
+
+    /// Start checking share limits periodically
+    fn start_share_limits_checker(self: &Arc<Self>) {
+        let shared = self.clone();
+
+        tokio::spawn(async move {
+            let check_interval = Duration::from_secs(60);
+
+            loop {
+                tokio::time::sleep(check_interval).await;
+
+                let mut actions: Vec<(String, settings::LimitAction)> = Vec::new();
+
+                {
+                    let guard = shared.torrents.read();
+                    for (hash, torrent) in guard.iter() {
+                        if matches!(
+                            torrent.state,
+                            TorrentState::Seeding | TorrentState::Completed
+                        ) && torrent.share_limits_reached()
+                        {
+                            actions.push((hash.clone(), torrent.share_limits.limit_action));
+                        }
+                    }
+                }
+
+                for (hash, action) in actions {
+                    match action {
+                        settings::LimitAction::Pause => {
+                            tracing::info!("Share limit reached for {}, pausing", hash);
+                            let _ = shared.pause_torrent(&hash).await;
+                        }
+                        settings::LimitAction::Remove => {
+                            tracing::info!(
+                                "Share limit reached for {}, removing (keeping files)",
+                                hash
+                            );
+                            let _ = shared.remove_torrent(&hash, false).await;
+                        }
+                        settings::LimitAction::RemoveWithFiles => {
+                            tracing::info!("Share limit reached for {}, removing with files", hash);
+                            let _ = shared.remove_torrent(&hash, true).await;
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    /// Loads settings.json (if present) and applies it to live engine state.
+    async fn apply_persisted_settings(self: &Arc<Self>) {
+        let Some(s) = persistence::load_settings().await else {
+            return;
+        };
+
+        {
+            let mut categories = self.categories.write();
+            for c in s.categories {
+                categories.insert(c.name.clone(), c);
+            }
+        }
+        *self.auto_tracker_settings.write() = s.auto_trackers;
+        *self.move_on_complete_settings.write() = s.move_on_complete;
+        *self.external_program_settings.write() = s.external_program;
+        *self.default_share_limits.write() = s.default_share_limits;
+        self.max_active_downloads
+            .store(s.max_active_downloads, Ordering::Relaxed);
+        self.max_active_uploads
+            .store(s.max_active_uploads, Ordering::Relaxed);
+        self.no_seed_mode.store(s.no_seed_mode, Ordering::Release);
+        self.disconnect_on_complete
+            .store(s.disconnect_on_complete, Ordering::Release);
+        {
+            let mut limiter = self.bandwidth_limiter.write();
+            limiter.set_download_limit(s.download_limit);
+            limiter.set_upload_limit(s.upload_limit);
+        }
+        *self.bandwidth_limits.write() = (s.download_limit, s.upload_limit);
+
+        for folder in s.watch_folders {
+            self.watch_manager.add_folder(folder).await;
+        }
+        for feed in s.rss_feeds {
+            self.rss_manager.add_feed(feed).await;
+        }
+        for rule in s.rss_rules {
+            self.rss_manager.add_rule(rule).await;
+        }
+        self.rss_manager
+            .restore_downloaded_history(s.rss_downloaded)
+            .await;
+
+        tracing::info!("Loaded persisted settings");
+    }
+
+    /// Restores the previous session's torrents (in queue order) and pending
+    /// magnets. Progress is recovered by the normal on-add verification.
+    async fn restore_session(self: Arc<Self>) {
+        let Some(session) = persistence::load_session().await else {
+            return;
+        };
+
+        tracing::info!(
+            "Restoring session: {} torrents, {} pending magnets",
+            session.torrents.len(),
+            session.pending_magnets.len()
+        );
+
+        for saved in session.torrents {
+            let Some(blob) = persistence::load_torrent_blob(&saved.info_hash).await else {
+                tracing::warn!("Missing torrent blob for {}, skipping", saved.info_hash);
+                continue;
+            };
+
+            let meta = match Metainfo::from_info_dict(&blob, &saved.trackers) {
+                Ok(meta) => meta,
+                Err(e) => {
+                    tracing::warn!("Corrupt torrent blob for {}: {}", saved.info_hash, e);
+                    continue;
+                }
+            };
+
+            let opts = AddTorrentOptions {
+                save_path: Some(saved.save_path.clone()),
+                category: saved.category.clone(),
+                tags: saved.tags.clone(),
+                add_paused: saved.paused,
+                share_limits: Some(saved.share_limits.clone()),
+            };
+
+            match self.add_torrent(meta, opts).await {
+                Ok(hash) => {
+                    let mut torrents = self.torrents.write();
+                    if let Some(torrent) = torrents.get_mut(&hash) {
+                        // Downloaded bytes are re-derived from verification;
+                        // uploaded must be restored for ratio accounting.
+                        torrent.stats.uploaded = saved.uploaded;
+                        torrent.sequential_download = saved.sequential_download;
+                        torrent.move_on_complete = saved.move_on_complete.clone();
+                        if saved.file_priorities.len() == torrent.file_priorities.len() {
+                            torrent.file_priorities = saved
+                                .file_priorities
+                                .iter()
+                                .copied()
+                                .map(FilePriority::from_u8)
+                                .collect();
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to restore torrent {}: {}", saved.info_hash, e);
+                }
+            }
+        }
+
+        for uri in session.pending_magnets {
+            if let Err(e) = self.add_magnet(&uri, AddTorrentOptions::default()).await {
+                tracing::warn!("Failed to restore magnet {}: {}", uri, e);
+            }
+        }
+    }
+
+    /// Single writer task that coalesces bursts of persist requests into one
+    /// disk write per kind.
+    fn start_persistence_writer(self: &Arc<Self>, mut rx: mpsc::UnboundedReceiver<PersistKind>) {
+        let shared = self.clone();
+        tokio::spawn(async move {
+            while let Some(first) = rx.recv().await {
+                let mut save_settings = matches!(first, PersistKind::Settings);
+                let mut save_session = matches!(first, PersistKind::Session);
+
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                while let Ok(kind) = rx.try_recv() {
+                    match kind {
+                        PersistKind::Settings => save_settings = true,
+                        PersistKind::Session => save_session = true,
+                    }
+                }
+
+                if save_settings {
+                    let snapshot = shared.snapshot_settings().await;
+                    if let Err(e) = persistence::save_settings(&snapshot).await {
+                        tracing::warn!("Failed to save settings: {}", e);
+                    }
+                }
+                if save_session {
+                    let snapshot = shared.snapshot_session();
+                    if let Err(e) = persistence::save_session(&snapshot).await {
+                        tracing::warn!("Failed to save session: {}", e);
+                    }
+                }
+            }
+        });
+    }
+
+    /// Periodic session flush so transfer counters survive a crash.
+    fn start_periodic_session_flush(self: &Arc<Self>) {
+        let shared = self.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            interval.tick().await; // consume the immediate first tick
+            loop {
+                interval.tick().await;
+                shared.persist_session();
+            }
+        });
+    }
+
+    /// Queues a coalesced settings save.
+    pub fn persist_settings(&self) {
+        let _ = self.persist_tx.send(PersistKind::Settings);
+    }
+
+    /// Queues a coalesced session save.
+    pub fn persist_session(&self) {
+        let _ = self.persist_tx.send(PersistKind::Session);
+    }
+
+    /// Writes settings and session immediately; used on shutdown.
+    pub async fn save_all_now(&self) {
+        let settings = self.snapshot_settings().await;
+        if let Err(e) = persistence::save_settings(&settings).await {
+            tracing::warn!("Failed to save settings on shutdown: {}", e);
+        }
+        let session = self.snapshot_session();
+        if let Err(e) = persistence::save_session(&session).await {
+            tracing::warn!("Failed to save session on shutdown: {}", e);
+        }
+    }
+
+    async fn snapshot_settings(&self) -> persistence::PersistedSettings {
+        // Take everything behind sync locks first; the guards must not live
+        // across the awaits below.
+        let (download_limit, upload_limit) = *self.bandwidth_limits.read();
+        let categories: Vec<settings::Category> =
+            self.categories.read().values().cloned().collect();
+        let auto_trackers = self.auto_tracker_settings.read().clone();
+        let move_on_complete = self.move_on_complete_settings.read().clone();
+        let external_program = self.external_program_settings.read().clone();
+        let default_share_limits = self.default_share_limits.read().clone();
+
+        persistence::PersistedSettings {
+            download_dir: Some(self.download_dir.clone()),
+            categories,
+            auto_trackers,
+            move_on_complete,
+            external_program,
+            default_share_limits,
+            watch_folders: self.watch_manager.get_folders().await,
+            rss_feeds: self.rss_manager.get_feeds().await,
+            rss_rules: self.rss_manager.get_rules().await,
+            rss_downloaded: self.rss_manager.get_downloaded_history().await,
+            max_active_downloads: self.max_active_downloads.load(Ordering::Relaxed),
+            max_active_uploads: self.max_active_uploads.load(Ordering::Relaxed),
+            download_limit,
+            upload_limit,
+            no_seed_mode: self.no_seed_mode.load(Ordering::Acquire),
+            disconnect_on_complete: self.disconnect_on_complete.load(Ordering::Acquire),
+        }
+    }
+
+    fn snapshot_session(&self) -> persistence::PersistedSession {
+        let torrents = self.torrents.read();
+        let mut entries: Vec<&ManagedTorrent> = torrents.values().collect();
+        // Preserve queue (FIFO) order across restarts.
+        entries.sort_by_key(|t| t.added_at);
+
+        let torrent_entries = entries
+            .into_iter()
+            .map(|t| persistence::PersistedTorrent {
+                info_hash: t.info_hash_hex(),
+                save_path: t.save_path.clone(),
+                category: t.category.clone(),
+                tags: t.tags.iter().cloned().collect(),
+                share_limits: t.share_limits.clone(),
+                file_priorities: t.file_priorities.iter().map(|p| *p as u8).collect(),
+                sequential_download: t.sequential_download,
+                paused: t.state == TorrentState::Paused,
+                uploaded: t.stats.uploaded,
+                trackers: t.trackers.clone(),
+                move_on_complete: t.move_on_complete.clone(),
+            })
+            .collect();
+
+        let pending_magnets = self
+            .pending_magnets
+            .read()
+            .values()
+            .filter(|p| p.error.is_none())
+            .map(|p| p.uri.clone())
+            .collect();
+
+        persistence::PersistedSession {
+            torrents: torrent_entries,
+            pending_magnets,
+        }
+    }
 }
 
 #[allow(dead_code)]
@@ -141,7 +655,7 @@ impl TorrentEngine {
             }
         }
 
-        let lsd = match LsdService::new(initial_port).await {
+        let lsd = match LsdService::new().await {
             Ok(service) => Some(Arc::new(service)),
             Err(e) => {
                 tracing::warn!("Failed to start LSD: {}", e);
@@ -167,7 +681,9 @@ impl TorrentEngine {
             .join("search_plugins");
         let search_engine = Arc::new(search::SearchEngine::new(plugin_dir));
 
-        let engine = Self {
+        let (persist_tx, persist_rx) = mpsc::unbounded_channel();
+
+        let shared = Arc::new(EngineShared {
             peer_id,
             download_dir: download_dir.clone(),
             listen_port,
@@ -176,10 +692,8 @@ impl TorrentEngine {
             disk_manager: Arc::new(DiskManager::new()),
             bandwidth_limiter: Arc::new(RwLock::new(BandwidthLimiter::unlimited())),
             dht,
-            _port_mapper: Arc::new(RwLock::new(port_mapper)),
             lsd,
             event_tx,
-            event_rx: Arc::new(RwLock::new(Some(event_rx))),
             global_connections: Arc::new(AtomicUsize::new(0)),
             max_active_downloads: Arc::new(AtomicUsize::new(5)),
             max_active_uploads: Arc::new(AtomicUsize::new(5)),
@@ -194,290 +708,47 @@ impl TorrentEngine {
                 settings::ExternalProgramSettings::default(),
             )),
             default_share_limits: Arc::new(RwLock::new(settings::ShareLimits::default())),
+            pending_magnets: RwLock::new(HashMap::new()),
+            bandwidth_limits: RwLock::new((0, 0)),
             watch_manager: watch_manager.clone(),
             rss_manager: rss_manager.clone(),
             search_engine,
+            persist_tx,
+        });
+
+        let engine = Self {
+            shared: shared.clone(),
+            _port_mapper: Arc::new(RwLock::new(port_mapper)),
+            event_rx: Arc::new(RwLock::new(Some(event_rx))),
         };
 
+        // Apply persisted settings before anything starts producing events.
+        shared.apply_persisted_settings().await;
+
         engine.start_background_tasks();
-        engine.start_watch_folder_processor(watch_rx);
-        engine.start_rss_processor(rss_rx);
-        engine.start_share_limits_checker();
+        shared.start_watch_folder_processor(watch_rx);
+        shared.start_rss_processor(rss_rx);
+        shared.start_share_limits_checker();
+        shared.start_persistence_writer(persist_rx);
+        shared.start_periodic_session_flush();
 
         // Start watch folder and RSS managers
         watch_manager.start();
         rss_manager.start();
 
+        // Restore the previous session in the background; torrents reappear
+        // as they re-verify.
+        {
+            let shared = shared.clone();
+            tokio::spawn(async move {
+                shared.restore_session().await;
+            });
+        }
+
+        // Capture download_dir (and defaults) on first run.
+        shared.persist_settings();
+
         Ok(engine)
-    }
-
-    /// Start processing watch folder events
-    fn start_watch_folder_processor(&self, mut rx: mpsc::UnboundedReceiver<watch::WatchEvent>) {
-        let torrents = self.torrents.clone();
-        let download_dir = self.download_dir.clone();
-        let categories = self.categories.clone();
-        let auto_trackers = self.auto_tracker_settings.clone();
-        let default_limits = self.default_share_limits.clone();
-
-        // We need a way to add torrents from the watch folder
-        // For now, store events and process them
-        tokio::spawn(async move {
-            while let Some(event) = rx.recv().await {
-                match event {
-                    watch::WatchEvent::TorrentFound {
-                        path,
-                        category,
-                        tags,
-                        ..
-                    } => {
-                        tracing::info!("Watch folder: Found torrent file {:?}", path);
-                        // Read and parse torrent file
-                        match tokio::fs::read(&path).await {
-                            Ok(data) => {
-                                match oxidebt_torrent::Metainfo::from_bytes(&data) {
-                                    Ok(meta) => {
-                                        // Add auto-trackers
-                                        let auto_settings = auto_trackers.read();
-                                        if auto_settings.enabled {
-                                            for tracker in &auto_settings.trackers {
-                                                if !meta.tracker_urls().contains(tracker) {
-                                                    // Note: We can't easily add trackers to parsed metainfo
-                                                    // This would require modifying the metainfo struct
-                                                    tracing::debug!(
-                                                        "Would add tracker: {}",
-                                                        tracker
-                                                    );
-                                                }
-                                            }
-                                        }
-
-                                        // Determine save path based on category
-                                        let save_path = if let Some(ref cat_name) = category {
-                                            let cats = categories.read();
-                                            cats.get(cat_name)
-                                                .map(|c| c.save_path.clone())
-                                                .unwrap_or_else(|| download_dir.clone())
-                                        } else {
-                                            download_dir.clone()
-                                        };
-
-                                        let hash = match &meta.info_hash {
-                                            oxidebt_torrent::InfoHash::V1(h) => h.to_hex(),
-                                            oxidebt_torrent::InfoHash::V2(h) => h.to_hex(),
-                                            oxidebt_torrent::InfoHash::Hybrid { v1, .. } => {
-                                                v1.to_hex()
-                                            }
-                                        };
-
-                                        tracing::info!(
-                                            "Watch folder: Adding torrent '{}' ({})",
-                                            meta.info.name,
-                                            hash
-                                        );
-
-                                        let mut managed =
-                                            ManagedTorrent::with_save_path(meta, save_path);
-                                        managed.category = category;
-                                        managed.tags = tags.into_iter().collect();
-                                        managed.share_limits = default_limits.read().clone();
-
-                                        torrents.write().insert(hash, managed);
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            "Watch folder: Failed to parse {:?}: {}",
-                                            path,
-                                            e
-                                        );
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!("Watch folder: Failed to read {:?}: {}", path, e);
-                            }
-                        }
-                    }
-                }
-            }
-        });
-    }
-
-    /// Start processing RSS match events
-    fn start_rss_processor(&self, mut rx: mpsc::UnboundedReceiver<rss::RssMatchEvent>) {
-        let torrents = self.torrents.clone();
-        let download_dir = self.download_dir.clone();
-        let categories = self.categories.clone();
-        let default_limits = self.default_share_limits.clone();
-
-        tokio::spawn(async move {
-            while let Some(event) = rx.recv().await {
-                tracing::info!(
-                    "RSS: Matched '{}' from feed {} with rule {}",
-                    event.item.title,
-                    event.feed_id,
-                    event.rule_id
-                );
-
-                let torrent_url = &event.item.torrent_url;
-
-                // Determine save path
-                let save_path = if let Some(ref path) = event.save_path {
-                    PathBuf::from(path)
-                } else if let Some(ref cat_name) = event.category {
-                    let cats = categories.read();
-                    cats.get(cat_name)
-                        .map(|c| c.save_path.clone())
-                        .unwrap_or_else(|| download_dir.clone())
-                } else {
-                    download_dir.clone()
-                };
-
-                // Handle magnet links vs torrent URLs
-                if torrent_url.starts_with("magnet:") {
-                    // TODO: Add magnet link support in RSS processor
-                    tracing::info!("RSS: Would add magnet: {}", torrent_url);
-                } else {
-                    // Maximum torrent file size (10 MB - should be more than enough)
-                    const MAX_TORRENT_FILE_SIZE: u64 = 10 * 1024 * 1024;
-
-                    // Download torrent file
-                    match reqwest::get(torrent_url).await {
-                        Ok(response) => {
-                            // Check content-length before downloading
-                            if let Some(content_length) = response.content_length() {
-                                if content_length > MAX_TORRENT_FILE_SIZE {
-                                    tracing::warn!(
-                                        "RSS: Torrent file too large ({} bytes, max {}): {}",
-                                        content_length,
-                                        MAX_TORRENT_FILE_SIZE,
-                                        torrent_url
-                                    );
-                                    continue;
-                                }
-                            }
-
-                            match response.bytes().await {
-                                Ok(data) => {
-                                    // Also check after download in case content-length was missing
-                                    if data.len() as u64 > MAX_TORRENT_FILE_SIZE {
-                                        tracing::warn!(
-                                        "RSS: Downloaded torrent file too large ({} bytes, max {}): {}",
-                                        data.len(),
-                                        MAX_TORRENT_FILE_SIZE,
-                                        torrent_url
-                                    );
-                                        continue;
-                                    }
-
-                                    match oxidebt_torrent::Metainfo::from_bytes(&data) {
-                                        Ok(meta) => {
-                                            let hash = match &meta.info_hash {
-                                                oxidebt_torrent::InfoHash::V1(h) => h.to_hex(),
-                                                oxidebt_torrent::InfoHash::V2(h) => h.to_hex(),
-                                                oxidebt_torrent::InfoHash::Hybrid {
-                                                    v1, ..
-                                                } => v1.to_hex(),
-                                            };
-
-                                            tracing::info!(
-                                                "RSS: Adding torrent '{}' ({})",
-                                                meta.info.name,
-                                                hash
-                                            );
-
-                                            let mut managed =
-                                                ManagedTorrent::with_save_path(meta, save_path);
-                                            managed.category = event.category;
-                                            managed.tags = event.tags.into_iter().collect();
-                                            managed.share_limits = default_limits.read().clone();
-
-                                            if event.add_paused {
-                                                managed.state = TorrentState::Paused;
-                                            }
-
-                                            torrents.write().insert(hash, managed);
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(
-                                                "RSS: Failed to parse torrent from {}: {}",
-                                                torrent_url,
-                                                e
-                                            );
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "RSS: Failed to read torrent from {}: {}",
-                                        torrent_url,
-                                        e
-                                    );
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "RSS: Failed to download torrent from {}: {}",
-                                torrent_url,
-                                e
-                            );
-                        }
-                    }
-                }
-            }
-        });
-    }
-
-    /// Start checking share limits periodically
-    fn start_share_limits_checker(&self) {
-        let torrents = self.torrents.clone();
-
-        tokio::spawn(async move {
-            let check_interval = Duration::from_secs(60);
-
-            loop {
-                tokio::time::sleep(check_interval).await;
-
-                let mut actions: Vec<(String, settings::LimitAction)> = Vec::new();
-
-                {
-                    let guard = torrents.read();
-                    for (hash, torrent) in guard.iter() {
-                        if matches!(
-                            torrent.state,
-                            TorrentState::Seeding | TorrentState::Completed
-                        ) && torrent.share_limits_reached()
-                        {
-                            actions.push((hash.clone(), torrent.share_limits.limit_action));
-                        }
-                    }
-                }
-
-                for (hash, action) in actions {
-                    match action {
-                        settings::LimitAction::Pause => {
-                            let mut guard = torrents.write();
-                            if let Some(torrent) = guard.get_mut(&hash) {
-                                tracing::info!("Share limit reached for {}, pausing", hash);
-                                torrent.state = TorrentState::Paused;
-                            }
-                        }
-                        settings::LimitAction::Remove => {
-                            tracing::info!(
-                                "Share limit reached for {}, removing (keeping files)",
-                                hash
-                            );
-                            torrents.write().remove(&hash);
-                        }
-                        settings::LimitAction::RemoveWithFiles => {
-                            tracing::info!("Share limit reached for {}, removing with files", hash);
-                            // TODO: Actually delete files
-                            torrents.write().remove(&hash);
-                        }
-                    }
-                }
-            }
-        });
     }
 
     fn start_background_tasks(&self) {
@@ -579,6 +850,7 @@ impl TorrentEngine {
     }
 
     fn start_event_processor(&self) {
+        let shared = self.shared.clone();
         let torrents = self.torrents.clone();
         let event_rx = self.event_rx.clone();
         let no_seed_mode = self.no_seed_mode.clone();
@@ -643,6 +915,15 @@ impl TorrentEngine {
                                 }
                                 tracing::info!("Torrent {} download complete!", torrent_hash);
 
+                                if !torrent.completion_processed {
+                                    torrent.completion_processed = true;
+                                    let shared = shared.clone();
+                                    let hash = torrent_hash.clone();
+                                    tokio::spawn(async move {
+                                        shared.handle_torrent_completed(hash).await;
+                                    });
+                                }
+
                                 // If no_seed_mode and disconnect_on_complete are both enabled,
                                 // disconnect all peers for this completed torrent
                                 if no_seed_mode.load(Ordering::Acquire)
@@ -662,16 +943,32 @@ impl TorrentEngine {
                             }
                         }
                     }
-                    PeerEvent::BlockReceived { torrent_hash, size } => {
+                    PeerEvent::BlockReceived {
+                        torrent_hash,
+                        peer_addr,
+                        size,
+                    } => {
                         let mut torrents = torrents.write();
                         if let Some(torrent) = torrents.get_mut(&torrent_hash) {
                             torrent.stats.downloaded += size;
+                            if let Some(peer) = torrent.peers.get_mut(&peer_addr) {
+                                peer.download_bytes += size;
+                                peer.last_active = Instant::now();
+                            }
                         }
                     }
-                    PeerEvent::BlockSent { torrent_hash, size } => {
+                    PeerEvent::BlockSent {
+                        torrent_hash,
+                        peer_addr,
+                        size,
+                    } => {
                         let mut torrents = torrents.write();
                         if let Some(torrent) = torrents.get_mut(&torrent_hash) {
                             torrent.stats.uploaded += size;
+                            if let Some(peer) = torrent.peers.get_mut(&peer_addr) {
+                                peer.upload_bytes += size;
+                                peer.last_active = Instant::now();
+                            }
                         }
                     }
                     PeerEvent::PeerBitfield {
@@ -767,6 +1064,7 @@ impl TorrentEngine {
         };
 
         let torrents = self.torrents.clone();
+        let listen_port = self.listen_port.clone();
 
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(LSD_ANNOUNCE_INTERVAL);
@@ -790,8 +1088,9 @@ impl TorrentEngine {
                         .collect()
                 };
 
+                let port = listen_port.load(Ordering::Relaxed);
                 for info_hash in hashes {
-                    if let Err(e) = lsd.announce(&info_hash).await {
+                    if let Err(e) = lsd.announce(&info_hash, port).await {
                         tracing::debug!("LSD announce failed: {}", e);
                     }
                 }
@@ -804,6 +1103,9 @@ impl TorrentEngine {
             Some(lsd) => lsd.clone(),
             None => return,
         };
+
+        // Single receive loop inside the service feeds the broadcast channel.
+        lsd.start_receiver();
 
         let torrents = self.torrents.clone();
         let mut rx = lsd.subscribe();
@@ -848,37 +1150,6 @@ impl TorrentEngine {
                 }
             }
         });
-
-        // Also start the LSD listener
-        let lsd_for_receive = self.lsd.clone();
-        let torrents_for_receive = self.torrents.clone();
-        if let Some(lsd_service) = lsd_for_receive {
-            tokio::spawn(async move {
-                loop {
-                    let info_hashes: Vec<[u8; 20]> = {
-                        let torrents = torrents_for_receive.read();
-                        torrents
-                            .values()
-                            .filter(|t| {
-                                matches!(
-                                    t.state,
-                                    TorrentState::Downloading
-                                        | TorrentState::Seeding
-                                        | TorrentState::Completed
-                                )
-                            })
-                            .filter_map(|t| t.info_hash_bytes())
-                            .collect()
-                    };
-
-                    if !info_hashes.is_empty() {
-                        lsd_service.clone().start(info_hashes);
-                    }
-
-                    tokio::time::sleep(LSD_ANNOUNCE_INTERVAL).await;
-                }
-            });
-        }
     }
 
     fn start_dht_discovery_task(&self) {
@@ -1056,7 +1327,7 @@ impl TorrentEngine {
         let dht = self.dht.clone();
 
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(OPTIMISTIC_UNCHOKE_INTERVAL);
+            let mut interval = tokio::time::interval(REANNOUNCE_CHECK_INTERVAL);
 
             loop {
                 interval.tick().await;
@@ -1202,9 +1473,19 @@ impl TorrentEngine {
 
     /// Sets global bandwidth limits.
     pub fn set_bandwidth_limits(&self, download_limit: u64, upload_limit: u64) {
-        let mut limiter = self.bandwidth_limiter.write();
-        limiter.set_download_limit(download_limit);
-        limiter.set_upload_limit(upload_limit);
+        {
+            let mut limiter = self.bandwidth_limiter.write();
+            limiter.set_download_limit(download_limit);
+            limiter.set_upload_limit(upload_limit);
+        }
+        *self.bandwidth_limits.write() = (download_limit, upload_limit);
+        self.persist_settings();
+    }
+
+    /// Returns the configured bandwidth limits (download, upload) in
+    /// bytes/sec; 0 means unlimited.
+    pub fn get_bandwidth_limits(&self) -> (u64, u64) {
+        *self.bandwidth_limits.read()
     }
 
     /// Sets no seed mode. When enabled, the client rejects all upload requests
@@ -1215,6 +1496,7 @@ impl TorrentEngine {
             "No Seed Mode {}",
             if enabled { "enabled" } else { "disabled" }
         );
+        self.persist_settings();
     }
 
     /// Returns whether no seed mode is currently enabled.
@@ -1231,6 +1513,7 @@ impl TorrentEngine {
             "Disconnect on Complete {}",
             if enabled { "enabled" } else { "disabled" }
         );
+        self.persist_settings();
     }
 
     /// Returns whether disconnect on complete mode is currently enabled.
@@ -1242,17 +1525,33 @@ impl TorrentEngine {
     pub async fn add_torrent_file(&self, path: &str) -> Result<String, EngineError> {
         let data = tokio::fs::read(path).await?;
         let meta = Metainfo::from_bytes(&data)?;
-        self.add_torrent(meta).await
+        self.add_torrent(meta, AddTorrentOptions::default()).await
     }
 
     /// Adds a torrent from raw bytes.
     pub async fn add_torrent_bytes(&self, data: &[u8]) -> Result<String, EngineError> {
         let meta = Metainfo::from_bytes(data)?;
-        self.add_torrent(meta).await
+        self.add_torrent(meta, AddTorrentOptions::default()).await
     }
 
     /// Adds a torrent from a magnet link URI.
     pub async fn add_magnet(&self, uri: &str) -> Result<String, EngineError> {
+        self.shared
+            .add_magnet(uri, AddTorrentOptions::default())
+            .await
+    }
+}
+
+impl EngineShared {
+    /// Starts adding a torrent from a magnet link. Returns the info hash
+    /// immediately; metadata discovery and fetch run in the background, with
+    /// progress surfaced through `pending_magnets` as a metaDL entry that
+    /// turns into a real torrent (or an error entry) when the fetch ends.
+    pub async fn add_magnet(
+        self: &Arc<Self>,
+        uri: &str,
+        opts: AddTorrentOptions,
+    ) -> Result<String, EngineError> {
         let magnet = MagnetLink::parse(uri)?;
 
         let hash = match &magnet.info_hash {
@@ -1261,8 +1560,61 @@ impl TorrentEngine {
             InfoHash::Hybrid { v1, .. } => v1.to_hex(),
         };
 
+        if self.torrents.read().contains_key(&hash) {
+            return Err(EngineError::Duplicate(hash));
+        }
+
+        let name = magnet
+            .display_name
+            .clone()
+            .unwrap_or_else(|| hash[..16.min(hash.len())].to_string());
+
+        {
+            let mut pending = self.pending_magnets.write();
+            if pending.contains_key(&hash) {
+                return Err(EngineError::Duplicate(hash));
+            }
+            pending.insert(
+                hash.clone(),
+                PendingMagnet {
+                    uri: uri.to_string(),
+                    name,
+                    error: None,
+                },
+            );
+        }
+        self.persist_session();
+
+        let shared = self.clone();
+        let hash_for_fetch = hash.clone();
+        tokio::spawn(async move {
+            if let Err(msg) = shared
+                .fetch_magnet_metadata(&hash_for_fetch, magnet, opts)
+                .await
+            {
+                tracing::warn!("Magnet {}: {}", hash_for_fetch, msg);
+                let mut pending = shared.pending_magnets.write();
+                if let Some(entry) = pending.get_mut(&hash_for_fetch) {
+                    entry.error = Some(msg);
+                }
+            }
+        });
+
+        Ok(hash)
+    }
+
+    /// Background half of a magnet add: discover peers via DHT and trackers,
+    /// fetch the metainfo over ut_metadata, verify it against the info hash,
+    /// then route into the normal add path.
+    async fn fetch_magnet_metadata(
+        self: &Arc<Self>,
+        hash: &str,
+        magnet: MagnetLink,
+        opts: AddTorrentOptions,
+    ) -> Result<(), String> {
         let info_hash_bytes = match &magnet.info_hash {
             InfoHash::V1(h) => *h.as_bytes(),
+            // BEP 52: DHT/tracker operations for v2 use the truncated hash.
             InfoHash::V2(h) => {
                 let mut arr = [0u8; 20];
                 arr.copy_from_slice(&h.as_bytes()[..20]);
@@ -1275,9 +1627,7 @@ impl TorrentEngine {
 
         if let Some(ref dht) = self.dht {
             if let Ok(dht_peers) = dht.get_peers(info_hash_bytes).await {
-                for peer in dht_peers {
-                    peers.insert(peer);
-                }
+                peers.extend(dht_peers);
             }
         }
 
@@ -1290,7 +1640,9 @@ impl TorrentEngine {
                     port: self.listen_port.load(Ordering::Relaxed),
                     uploaded: 0,
                     downloaded: 0,
-                    left: 0,
+                    // Size unknown until we have metadata; any non-zero value
+                    // avoids being counted as a seed.
+                    left: 1,
                     event: TrackerEvent::Started,
                 };
 
@@ -1303,46 +1655,63 @@ impl TorrentEngine {
         }
 
         if peers.is_empty() {
-            tracing::warn!("No peers found for magnet link {}", hash);
-            return Ok(hash);
+            return Err("no peers found".to_string());
         }
 
-        let peer_id = self.peer_id;
         let metadata =
-            fetch_metadata_from_peers(peers.into_iter().collect(), info_hash_bytes, peer_id).await;
+            fetch_metadata_from_peers(peers.into_iter().collect(), info_hash_bytes, self.peer_id)
+                .await
+                .ok_or_else(|| "failed to fetch metadata from peers".to_string())?;
 
-        match metadata {
-            Some(meta_bytes) => {
-                let mut hasher = Sha1::new();
-                hasher.update(&meta_bytes);
-                let computed_hash: [u8; 20] = hasher.finalize().into();
-
-                if computed_hash != info_hash_bytes {
-                    tracing::warn!("Metadata hash mismatch for {}", hash);
-                    return Ok(hash);
-                }
-
-                match Metainfo::from_info_dict(&meta_bytes, &magnet.trackers) {
-                    Ok(meta) => self.add_torrent(meta).await,
-                    Err(e) => {
-                        tracing::warn!("Failed to parse fetched metadata: {}", e);
-                        Ok(hash)
-                    }
-                }
-            }
-            None => {
-                tracing::warn!("Failed to fetch metadata for {}", hash);
-                Ok(hash)
-            }
+        let mut hasher = Sha1::new();
+        hasher.update(&metadata);
+        let computed_hash: [u8; 20] = hasher.finalize().into();
+        if computed_hash != info_hash_bytes {
+            return Err("metadata hash mismatch".to_string());
         }
-    }
 
-    async fn add_torrent(&self, meta: Metainfo) -> Result<String, EngineError> {
+        let meta = Metainfo::from_info_dict(&metadata, &magnet.trackers)
+            .map_err(|e| format!("failed to parse fetched metadata: {}", e))?;
+
+        // The user may have removed the pending entry while we fetched.
+        if !self.pending_magnets.read().contains_key(hash) {
+            tracing::debug!("Magnet {} was removed during metadata fetch", hash);
+            return Ok(());
+        }
+
+        self.add_torrent(meta, opts)
+            .await
+            .map_err(|e| format!("failed to add torrent from fetched metadata: {}", e))?;
+
+        self.pending_magnets.write().remove(hash);
+        Ok(())
+    }
+    /// Adds a torrent to the engine. Every add source (UI, watch folders,
+    /// RSS, magnet metadata, session restore) routes through here so disk
+    /// registration, verification, auto-trackers, and queueing behave the
+    /// same everywhere.
+    pub async fn add_torrent(
+        self: &Arc<Self>,
+        meta: Metainfo,
+        opts: AddTorrentOptions,
+    ) -> Result<String, EngineError> {
         let hash = match &meta.info_hash {
             InfoHash::V1(h) => h.to_hex(),
             InfoHash::V2(h) => h.to_hex(),
             InfoHash::Hybrid { v1, .. } => v1.to_hex(),
         };
+
+        // A re-add would silently overwrite live state (peers, progress,
+        // disk registration) — reject it instead.
+        if self.torrents.read().contains_key(&hash) {
+            return Err(EngineError::Duplicate(hash));
+        }
+
+        // The wire protocol, trackers, and DHT all run on v1 hashes here; a
+        // v2-only torrent would sit in the list forever unable to connect.
+        if meta.info_hash.v1().is_none() {
+            return Err(EngineError::UnsupportedV2Only);
+        }
 
         let tracker_count = meta.tracker_urls().len();
         tracing::info!(
@@ -1353,13 +1722,258 @@ impl TorrentEngine {
             tracker_count
         );
 
+        // Resolve the save directory: explicit override > category path >
+        // engine download directory.
+        let save_dir = if let Some(path) = opts.save_path {
+            path
+        } else if let Some(ref cat_name) = opts.category {
+            let categories = self.categories.read();
+            categories
+                .get(cat_name)
+                .map(|c| c.save_path.clone())
+                .unwrap_or_else(|| self.download_dir.clone())
+        } else {
+            self.download_dir.clone()
+        };
+
+        let storage = Self::build_storage(&meta, &save_dir)?;
+
+        storage.preallocate().await?;
+        self.disk_manager.register(hash.clone(), storage);
+
+        let mut managed = ManagedTorrent::with_save_path(meta, save_dir);
+        managed.category = opts.category;
+        managed.tags = opts.tags.into_iter().collect();
+        managed.share_limits = opts
+            .share_limits
+            .unwrap_or_else(|| self.default_share_limits.read().clone());
+
+        // Inject configured auto-trackers into the live tracker list.
+        {
+            let auto = self.auto_tracker_settings.read();
+            if auto.enabled {
+                for url in &auto.trackers {
+                    if !managed.trackers.contains(url) {
+                        managed.trackers.push(url.clone());
+                        managed
+                            .tracker_info
+                            .push(tracker_info::TrackerInfo::new(url.clone()));
+                    }
+                }
+            }
+        }
+
+        let add_paused = opts.add_paused;
+        if add_paused {
+            managed.state = TorrentState::Paused;
+        }
+
+        // Capture the info dict for session persistence before the metainfo
+        // moves into the torrent map.
+        let raw_info = bytes::Bytes::copy_from_slice(managed.meta.raw_info());
+
+        self.torrents.write().insert(hash.clone(), managed);
+
+        {
+            let shared = self.clone();
+            let hash = hash.clone();
+            tokio::spawn(async move {
+                if let Err(e) = persistence::save_torrent_blob(&hash, &raw_info).await {
+                    tracing::warn!("Failed to persist torrent blob for {}: {}", hash, e);
+                }
+                shared.persist_session();
+            });
+        }
+
+        // Verify pre-existing data on disk. This restores progress for
+        // re-added torrents and runs for paused adds too, so resume knows
+        // what is already present.
+        let shared = self.clone();
+        let hash_for_verify = hash.clone();
+        tokio::spawn(async move {
+            shared.verify_existing_pieces(hash_for_verify).await;
+        });
+
+        if !add_paused {
+            let shared = self.clone();
+            let hash_for_start = hash.clone();
+            tokio::spawn(async move {
+                if let Err(e) = shared.start_torrent(&hash_for_start).await {
+                    tracing::error!("Failed to start torrent {}: {}", hash_for_start, e);
+                }
+            });
+        }
+
+        Ok(hash)
+    }
+
+    /// Streaming verification of whatever already exists on disk for this
+    /// torrent, batched for parallelism. Transitions the torrent out of
+    /// Checking when it finishes (unless it was added paused).
+    async fn verify_existing_pieces(self: Arc<Self>, hash: String) {
+        tracing::info!("Starting streaming piece verification for {}", hash);
+
+        let piece_count = match self.disk_manager.piece_count(&hash) {
+            Ok(count) => count,
+            Err(e) => {
+                tracing::warn!("Failed to get piece count for {}: {}", hash, e);
+                let torrents = self.torrents.read();
+                if let Some(torrent) = torrents.get(&hash) {
+                    torrent.piece_manager.mark_verification_complete();
+                }
+                return;
+            }
+        };
+
+        let mut valid_count = 0usize;
+        let mut downloaded_bytes = 0u64;
+
+        const BATCH_SIZE: usize = 32;
+
+        for batch_start in (0..piece_count).step_by(BATCH_SIZE) {
+            let batch_end = (batch_start + BATCH_SIZE).min(piece_count);
+
+            // Create futures for all pieces in this batch
+            let mut futures = Vec::with_capacity(batch_end - batch_start);
+            for i in batch_start..batch_end {
+                let dm = self.disk_manager.clone();
+                let hash = hash.clone();
+                futures.push(async move {
+                    (
+                        i as u32,
+                        dm.verify_piece(&hash, i as u32).await.unwrap_or(false),
+                    )
+                });
+            }
+
+            // Run all verifications in parallel
+            let batch_results = futures::future::join_all(futures).await;
+
+            // Update piece manager with results
+            {
+                let torrents = self.torrents.read();
+                if let Some(torrent) = torrents.get(&hash) {
+                    for (piece_idx, is_valid) in batch_results {
+                        if is_valid {
+                            torrent.piece_manager.mark_piece_complete(piece_idx);
+                            valid_count += 1;
+                            downloaded_bytes += torrent.piece_size(piece_idx);
+                        }
+                        torrent.piece_manager.mark_piece_verified(piece_idx);
+                    }
+                } else {
+                    return;
+                }
+            }
+
+            // Progress logging
+            if piece_count > 100 && batch_end % 100 < BATCH_SIZE {
+                tracing::debug!(
+                    "Verified {}/{} pieces for {} ({} valid so far)",
+                    batch_end,
+                    piece_count,
+                    hash,
+                    valid_count
+                );
+            }
+        }
+
+        {
+            let mut torrents = self.torrents.write();
+            // Get queue limits
+            let max_dl = self.max_active_downloads.load(Ordering::Relaxed);
+            let max_ul = self.max_active_uploads.load(Ordering::Relaxed);
+
+            // First, update stats and mark verification complete, get info for queue calculation
+            let transition_info = if let Some(torrent) = torrents.get_mut(&hash) {
+                // Use set_downloaded_baseline to avoid a bogus download rate spike
+                // (verified data wasn't downloaded this session, so shouldn't affect rate)
+                torrent.stats.set_downloaded_baseline(downloaded_bytes);
+                torrent.piece_manager.mark_verification_complete();
+
+                let is_complete = torrent.piece_manager.is_complete();
+                let added_at = torrent.added_at;
+                let should_transition = torrent.state == TorrentState::Checking;
+                tracing::info!(
+                    "Piece verification complete for {}: {}/{} pieces valid, is_complete={}",
+                    hash,
+                    valid_count,
+                    piece_count,
+                    is_complete
+                );
+                if should_transition {
+                    Some((is_complete, added_at))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // If we need to transition, calculate queue position and update state
+            if let Some((is_complete, added_at)) = transition_info {
+                // Calculate queue position
+                let queue_position = if is_complete {
+                    Self::queue_position_upload_from_map(&torrents, added_at)
+                } else {
+                    Self::queue_position_download_from_map(&torrents, added_at)
+                };
+
+                let should_queue = if is_complete {
+                    max_ul > 0 && queue_position >= max_ul
+                } else {
+                    max_dl > 0 && queue_position >= max_dl
+                };
+
+                // Now update the state
+                if let Some(torrent) = torrents.get_mut(&hash) {
+                    // Data was complete before this session; never fire
+                    // completion actions for it.
+                    if is_complete {
+                        torrent.completion_processed = true;
+                    }
+                    if should_queue {
+                        torrent.state = TorrentState::Queued;
+                        tracing::info!(
+                            "Verification done: Torrent {} queued (position {} >= limit {})",
+                            hash,
+                            queue_position,
+                            if is_complete { max_ul } else { max_dl }
+                        );
+                    } else if is_complete {
+                        torrent.state = TorrentState::Completed;
+                        if torrent.seeding_started_at.is_none() {
+                            torrent.seeding_started_at = Some(Instant::now());
+                        }
+                        tracing::info!(
+                            "Verification done: Torrent {} is complete, transitioning to Completed (position {})",
+                            hash,
+                            queue_position
+                        );
+                    } else {
+                        torrent.state = TorrentState::Downloading;
+                        tracing::info!(
+                            "Verification done: Torrent {} transitioning to Downloading (position {})",
+                            hash,
+                            queue_position
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Builds the disk storage layout for a torrent rooted at `save_dir`.
+    /// Single-file torrents live directly in `save_dir`; multi-file torrents
+    /// get a `save_dir/<name>/` directory.
+    fn build_storage(meta: &Metainfo, save_dir: &Path) -> Result<TorrentStorage, EngineError> {
         let is_single_file = meta.info.files.len() == 1
             && meta.info.files[0].path.to_string_lossy() == meta.info.name;
 
         let base_path = if is_single_file {
-            self.download_dir.clone()
+            save_dir.to_path_buf()
         } else {
-            self.download_dir.join(&meta.info.name)
+            save_dir.join(&meta.info.name)
         };
 
         let files: Vec<FileEntry> = {
@@ -1405,251 +2019,251 @@ impl TorrentEngine {
             })
             .collect();
 
-        let storage = TorrentStorage::new(base_path, files, pieces, meta.info.total_length, is_v2)?;
+        Ok(TorrentStorage::new(
+            base_path,
+            files,
+            pieces,
+            meta.info.total_length,
+            is_v2,
+        )?)
+    }
 
-        storage.preallocate().await?;
-        self.disk_manager.register(hash.clone(), storage);
-
-        let managed = ManagedTorrent::new(meta);
-
-        self.torrents.write().insert(hash.clone(), managed);
-
-        let hash_for_verify = hash.clone();
-        let torrents_for_verify = self.torrents.clone();
-        let disk_manager_for_verify = self.disk_manager.clone();
-        let max_active_downloads_for_verify = self.max_active_downloads.clone();
-        let max_active_uploads_for_verify = self.max_active_uploads.clone();
-
-        let hash_for_start = hash.clone();
-        let torrents_for_start = self.torrents.clone();
-        let tracker_client = self.tracker_client.clone();
-        let dht = self.dht.clone();
-        let peer_id = self.peer_id;
-        let listen_port = self.listen_port.clone();
-        let disk_manager_for_start = self.disk_manager.clone();
-        let bandwidth_limiter = self.bandwidth_limiter.clone();
-        let event_tx = self.event_tx.clone();
-        let global_connections = self.global_connections.clone();
-        let max_active_downloads = self.max_active_downloads.clone();
-        let max_active_uploads = self.max_active_uploads.clone();
-        let no_seed_mode_for_start = self.no_seed_mode.clone();
-        let disconnect_on_complete_for_start = self.disconnect_on_complete.clone();
-
-        tokio::spawn(async move {
-            tracing::info!(
-                "Starting streaming piece verification for {}",
-                hash_for_verify
-            );
-
-            let piece_count = match disk_manager_for_verify.piece_count(&hash_for_verify) {
-                Ok(count) => count,
-                Err(e) => {
-                    tracing::warn!("Failed to get piece count for {}: {}", hash_for_verify, e);
-                    let torrents = torrents_for_verify.read();
-                    if let Some(torrent) = torrents.get(&hash_for_verify) {
-                        torrent.piece_manager.mark_verification_complete();
-                    }
-                    return;
-                }
+    /// Runs once per fresh download completion: moves the data if configured
+    /// (per-torrent override > global target/category path), then runs the
+    /// external completion program.
+    async fn handle_torrent_completed(self: Arc<Self>, hash: String) {
+        let (current_save, per_torrent_target, category) = {
+            let torrents = self.torrents.read();
+            let Some(torrent) = torrents.get(&hash) else {
+                return;
             };
-
-            let mut valid_count = 0usize;
-            let mut downloaded_bytes = 0u64;
-
-            const BATCH_SIZE: usize = 32;
-
-            for batch_start in (0..piece_count).step_by(BATCH_SIZE) {
-                let batch_end = (batch_start + BATCH_SIZE).min(piece_count);
-
-                // Create futures for all pieces in this batch
-                let mut futures = Vec::with_capacity(batch_end - batch_start);
-                for i in batch_start..batch_end {
-                    let dm = disk_manager_for_verify.clone();
-                    let hash = hash_for_verify.clone();
-                    futures.push(async move {
-                        (
-                            i as u32,
-                            dm.verify_piece(&hash, i as u32).await.unwrap_or(false),
-                        )
-                    });
-                }
-
-                // Run all verifications in parallel
-                let batch_results = futures::future::join_all(futures).await;
-
-                // Update piece manager with results
-                {
-                    let torrents = torrents_for_verify.read();
-                    if let Some(torrent) = torrents.get(&hash_for_verify) {
-                        for (piece_idx, is_valid) in batch_results {
-                            if is_valid {
-                                torrent.piece_manager.mark_piece_complete(piece_idx);
-                                valid_count += 1;
-                                downloaded_bytes += torrent.piece_size(piece_idx);
-                            }
-                            torrent.piece_manager.mark_piece_verified(piece_idx);
-                        }
-                    } else {
-                        return;
-                    }
-                }
-
-                // Progress logging
-                if piece_count > 100 && batch_end % 100 < BATCH_SIZE {
-                    tracing::debug!(
-                        "Verified {}/{} pieces for {} ({} valid so far)",
-                        batch_end,
-                        piece_count,
-                        hash_for_verify,
-                        valid_count
-                    );
-                }
-            }
-
-            {
-                let mut torrents = torrents_for_verify.write();
-                // Get queue limits
-                let max_dl = max_active_downloads_for_verify.load(Ordering::Relaxed);
-                let max_ul = max_active_uploads_for_verify.load(Ordering::Relaxed);
-
-                // First, update stats and mark verification complete, get info for queue calculation
-                let transition_info = if let Some(torrent) = torrents.get_mut(&hash_for_verify) {
-                    // Use set_downloaded_baseline to avoid a bogus download rate spike
-                    // (verified data wasn't downloaded this session, so shouldn't affect rate)
-                    torrent.stats.set_downloaded_baseline(downloaded_bytes);
-                    torrent.piece_manager.mark_verification_complete();
-
-                    let is_complete = torrent.piece_manager.is_complete();
-                    let added_at = torrent.added_at;
-                    let should_transition = torrent.state == TorrentState::Checking;
-                    tracing::info!(
-                        "Piece verification complete for {}: {}/{} pieces valid, is_complete={}",
-                        hash_for_verify,
-                        valid_count,
-                        piece_count,
-                        is_complete
-                    );
-                    if should_transition {
-                        Some((is_complete, added_at))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                // If we need to transition, calculate queue position and update state
-                if let Some((is_complete, added_at)) = transition_info {
-                    // Calculate queue position
-                    let queue_position = if is_complete {
-                        Self::queue_position_upload_from_map(&torrents, added_at)
-                    } else {
-                        Self::queue_position_download_from_map(&torrents, added_at)
-                    };
-
-                    let should_queue = if is_complete {
-                        max_ul > 0 && queue_position >= max_ul
-                    } else {
-                        max_dl > 0 && queue_position >= max_dl
-                    };
-
-                    // Now update the state
-                    if let Some(torrent) = torrents.get_mut(&hash_for_verify) {
-                        if should_queue {
-                            torrent.state = TorrentState::Queued;
-                            tracing::info!(
-                                "Verification done: Torrent {} queued (position {} >= limit {})",
-                                hash_for_verify,
-                                queue_position,
-                                if is_complete { max_ul } else { max_dl }
-                            );
-                        } else if is_complete {
-                            torrent.state = TorrentState::Completed;
-                            if torrent.seeding_started_at.is_none() {
-                                torrent.seeding_started_at = Some(Instant::now());
-                            }
-                            tracing::info!(
-                                "Verification done: Torrent {} is complete, transitioning to Completed (position {})",
-                                hash_for_verify,
-                                queue_position
-                            );
-                        } else {
-                            torrent.state = TorrentState::Downloading;
-                            tracing::info!(
-                                "Verification done: Torrent {} transitioning to Downloading (position {})",
-                                hash_for_verify,
-                                queue_position
-                            );
-                        }
-                    }
-                }
-            }
-        });
-
-        tokio::spawn(async move {
-            if let Err(e) = Self::start_torrent_internal(
-                &hash_for_start,
-                torrents_for_start,
-                tracker_client,
-                dht,
-                peer_id,
-                listen_port,
-                disk_manager_for_start,
-                bandwidth_limiter,
-                event_tx,
-                global_connections,
-                max_active_downloads,
-                max_active_uploads,
-                no_seed_mode_for_start,
-                disconnect_on_complete_for_start,
+            (
+                torrent.save_path.clone(),
+                torrent.move_on_complete.clone(),
+                torrent.category.clone(),
             )
-            .await
-            {
-                tracing::error!("Failed to start torrent {}: {}", hash_for_start, e);
+        };
+
+        let global = self.move_on_complete_settings.read().clone();
+        let target = per_torrent_target.or_else(|| {
+            if !global.enabled {
+                return None;
+            }
+            if global.use_category_path {
+                category
+                    .and_then(|name| {
+                        self.categories
+                            .read()
+                            .get(&name)
+                            .map(|c| c.save_path.clone())
+                    })
+                    .or(global.target_path)
+            } else {
+                global.target_path
             }
         });
 
-        Ok(hash)
+        if let Some(target) = target {
+            if target != current_save {
+                tracing::info!("Moving completed torrent {} to {:?}", hash, target);
+                if let Err(e) = self.move_torrent_data(&hash, target).await {
+                    tracing::error!("Failed to move completed torrent {}: {}", hash, e);
+                }
+            }
+        }
+
+        if let Err(e) = self.run_completion_program(&hash).await {
+            tracing::error!("Completion program for {} failed: {}", hash, e);
+        }
     }
 
-    async fn start_torrent(&self, hash: &str) -> Result<(), EngineError> {
-        Self::start_torrent_internal(
-            hash,
-            self.torrents.clone(),
-            self.tracker_client.clone(),
-            self.dht.clone(),
-            self.peer_id,
-            self.listen_port.clone(),
-            self.disk_manager.clone(),
-            self.bandwidth_limiter.clone(),
-            self.event_tx.clone(),
-            self.global_connections.clone(),
-            self.max_active_downloads.clone(),
-            self.max_active_uploads.clone(),
-            self.no_seed_mode.clone(),
-            self.disconnect_on_complete.clone(),
-        )
-        .await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn start_torrent_internal(
+    /// Moves a completed torrent's data to `target` and re-roots its disk
+    /// storage there. Peers are disconnected for the duration (the torrent
+    /// sits in Moving); the run loop reconnects them afterwards.
+    async fn move_torrent_data(
+        self: &Arc<Self>,
         hash: &str,
-        torrents: Arc<RwLock<HashMap<String, ManagedTorrent>>>,
-        tracker_client: Arc<TrackerClient>,
-        dht: Option<Arc<DhtServer>>,
-        peer_id: PeerId,
-        listen_port: Arc<AtomicU16>,
-        disk_manager: Arc<DiskManager>,
-        bandwidth_limiter: Arc<RwLock<BandwidthLimiter>>,
-        event_tx: mpsc::UnboundedSender<PeerEvent>,
-        global_connections: Arc<AtomicUsize>,
-        max_active_downloads: Arc<AtomicUsize>,
-        max_active_uploads: Arc<AtomicUsize>,
-        no_seed_mode: Arc<AtomicBool>,
-        disconnect_on_complete: Arc<AtomicBool>,
+        target: PathBuf,
     ) -> Result<(), EngineError> {
-        tracing::info!("start_torrent_internal called for {}", hash);
+        let (name, old_save) = {
+            let mut torrents = self.torrents.write();
+            let torrent = torrents
+                .get_mut(hash)
+                .ok_or_else(|| EngineError::NotFound(hash.to_string()))?;
+            torrent.state = TorrentState::Moving;
+            let _ = torrent.shutdown_tx.send(());
+            torrent.peers.clear();
+            torrent.connecting_peers.clear();
+            torrent.unchoked_peers.clear();
+            let (new_shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
+            torrent.shutdown_tx = new_shutdown_tx;
+            (torrent.meta.info.name.clone(), torrent.save_path.clone())
+        };
+
+        // Close file handles before touching the files.
+        self.disk_manager.unregister(hash);
+
+        let src = old_save.join(&name);
+        let dst = target.join(&name);
+        let move_result = Self::move_path(src, dst, &target).await;
+
+        // Re-root storage at the new location on success, or back at the old
+        // one on failure.
+        let final_save = if move_result.is_ok() {
+            target
+        } else {
+            old_save
+        };
+
+        {
+            let mut torrents = self.torrents.write();
+            if let Some(torrent) = torrents.get_mut(hash) {
+                match Self::build_storage(&torrent.meta, &final_save) {
+                    Ok(storage) => self.disk_manager.register(hash.to_string(), storage),
+                    Err(e) => {
+                        tracing::error!("Failed to rebuild storage for {}: {}", hash, e);
+                    }
+                }
+                torrent.save_path = final_save;
+                // Leave the state alone if the user paused/removed mid-move.
+                if torrent.state == TorrentState::Moving {
+                    torrent.state = TorrentState::Completed;
+                }
+            }
+        }
+
+        move_result
+    }
+
+    /// Escape a string for safe use in shell commands.
+    /// This prevents command injection by escaping shell metacharacters.
+    #[cfg(unix)]
+    fn shell_escape(s: &str) -> String {
+        // For Unix shells, wrap in single quotes and escape any single quotes
+        // Single quotes preserve everything literally except single quotes themselves
+        let escaped = s.replace('\'', "'\"'\"'");
+        format!("'{}'", escaped)
+    }
+
+    #[cfg(windows)]
+    fn shell_escape(s: &str) -> String {
+        // For Windows cmd.exe, escape special characters
+        // The safest approach is to wrap in double quotes and escape problematic chars
+        let escaped = s
+            .replace('^', "^^")
+            .replace('&', "^&")
+            .replace('<', "^<")
+            .replace('>', "^>")
+            .replace('|', "^|")
+            .replace('%', "%%")
+            .replace('"', "\"\"");
+        format!("\"{}\"", escaped)
+    }
+
+    /// Run external program for a completed torrent
+    pub async fn run_completion_program(&self, hash: &str) -> Result<(), String> {
+        let settings = self.external_program_settings.read().clone();
+        if !settings.on_completion_enabled {
+            return Ok(());
+        }
+
+        let Some(command_template) = settings.on_completion_command else {
+            return Ok(());
+        };
+
+        let (name, save_path) = {
+            let torrents = self.torrents.read();
+            let torrent = torrents.get(hash).ok_or("Torrent not found")?;
+            (torrent.meta.info.name.clone(), torrent.save_path.clone())
+        };
+
+        // Escape all user-controlled values to prevent command injection
+        let escaped_name = Self::shell_escape(&name);
+        let escaped_full_path = Self::shell_escape(&save_path.join(&name).to_string_lossy());
+        let escaped_save_path = Self::shell_escape(&save_path.to_string_lossy());
+        let escaped_hash = Self::shell_escape(hash);
+
+        // Replace placeholders with escaped values
+        let command = command_template
+            .replace("%N", &escaped_name)
+            .replace("%F", &escaped_full_path)
+            .replace("%R", &escaped_save_path)
+            .replace("%D", &escaped_save_path)
+            .replace("%I", &escaped_hash);
+
+        tracing::info!("Running completion program: {}", command);
+
+        // Execute command
+        #[cfg(unix)]
+        let result = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(&command)
+            .spawn();
+
+        #[cfg(windows)]
+        let result = tokio::process::Command::new("cmd")
+            .arg("/C")
+            .arg(&command)
+            .spawn();
+
+        match result {
+            Ok(mut child) => {
+                // Don't wait for completion, just spawn it
+                tokio::spawn(async move {
+                    let _ = child.wait().await;
+                });
+                Ok(())
+            }
+            Err(e) => Err(format!("Failed to run command: {}", e)),
+        }
+    }
+
+    /// Renames `src` to `dst`, falling back to copy-and-delete for
+    /// cross-filesystem moves.
+    async fn move_path(src: PathBuf, dst: PathBuf, dst_dir: &Path) -> Result<(), EngineError> {
+        if src == dst {
+            return Ok(());
+        }
+        tokio::fs::create_dir_all(dst_dir).await?;
+
+        match tokio::fs::rename(&src, &dst).await {
+            Ok(()) => Ok(()),
+            Err(rename_err) => {
+                tracing::debug!(
+                    "rename {:?} -> {:?} failed ({}), falling back to copy",
+                    src,
+                    dst,
+                    rename_err
+                );
+                let src_clone = src.clone();
+                let dst_clone = dst.clone();
+                tokio::task::spawn_blocking(move || copy_recursively(&src_clone, &dst_clone))
+                    .await
+                    .map_err(|e| {
+                        EngineError::Io(std::io::Error::other(format!("copy task panicked: {e}")))
+                    })??;
+                if src.is_dir() {
+                    tokio::fs::remove_dir_all(&src).await?;
+                } else {
+                    tokio::fs::remove_file(&src).await?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Announces to trackers and the DHT, performs the initial state
+    /// transition, and spawns the torrent's run loop (unless queued).
+    async fn start_torrent(self: &Arc<Self>, hash: &str) -> Result<(), EngineError> {
+        tracing::info!("start_torrent called for {}", hash);
+
+        let torrents = &self.torrents;
+        let tracker_client = &self.tracker_client;
+        let dht = &self.dht;
+        let peer_id = self.peer_id;
+        let listen_port = &self.listen_port;
+        let max_active_downloads = &self.max_active_downloads;
+        let max_active_uploads = &self.max_active_uploads;
 
         let (trackers, info_hash_bytes, total_length, is_complete) = {
             let torrents_guard = torrents.read();
@@ -1676,75 +2290,9 @@ impl TorrentEngine {
         let info_hash = match info_hash_bytes {
             Some(h) => h,
             None => {
-                let mut torrents_guard = torrents.write();
-                // Check queue limits before transitioning
-                let max_dl = max_active_downloads.load(Ordering::Relaxed);
-                let max_ul = max_active_uploads.load(Ordering::Relaxed);
-
-                // First, check if we need to transition and get the info needed
-                let transition_info = if let Some(torrent) = torrents_guard.get(hash) {
-                    if torrent.state == TorrentState::Checking
-                        && torrent.piece_manager.is_verification_complete()
-                    {
-                        let is_complete = torrent.piece_manager.is_complete();
-                        let added_at = torrent.added_at;
-                        Some((is_complete, added_at))
-                    } else {
-                        if torrent.state == TorrentState::Checking {
-                            tracing::info!(
-                                "Torrent {} (V2-only) still checking, deferring state transition",
-                                hash
-                            );
-                        }
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                // If we need to transition, calculate queue position and update state
-                if let Some((is_complete, added_at)) = transition_info {
-                    let queue_position = if is_complete {
-                        Self::queue_position_upload_from_map(&torrents_guard, added_at)
-                    } else {
-                        Self::queue_position_download_from_map(&torrents_guard, added_at)
-                    };
-
-                    let should_queue = if is_complete {
-                        max_ul > 0 && queue_position >= max_ul
-                    } else {
-                        max_dl > 0 && queue_position >= max_dl
-                    };
-
-                    if let Some(torrent) = torrents_guard.get_mut(hash) {
-                        if should_queue {
-                            torrent.state = TorrentState::Queued;
-                            tracing::info!(
-                                "Torrent {} (V2-only) queued (position {} >= limit {})",
-                                hash,
-                                queue_position,
-                                if is_complete { max_ul } else { max_dl }
-                            );
-                        } else if is_complete {
-                            torrent.state = TorrentState::Completed;
-                            if torrent.seeding_started_at.is_none() {
-                                torrent.seeding_started_at = Some(Instant::now());
-                            }
-                            tracing::info!(
-                                "Torrent {} (V2-only) transitioning to Completed (position {})",
-                                hash,
-                                queue_position
-                            );
-                        } else {
-                            torrent.state = TorrentState::Downloading;
-                            tracing::info!(
-                                "Torrent {} (V2-only) transitioning to Downloading (position {})",
-                                hash,
-                                queue_position
-                            );
-                        }
-                    }
-                }
+                // add_torrent rejects v2-only torrents, so every mapped
+                // torrent has a v1 hash; this is defensive only.
+                tracing::warn!("Torrent {} has no v1 info hash; cannot start", hash);
                 return Ok(());
             }
         };
@@ -1940,47 +2488,48 @@ impl TorrentEngine {
         };
 
         if !is_queued {
-            let hash_clone = hash.to_string();
-            let torrents_clone = torrents.clone();
+            // Exactly one run loop per torrent: the loop survives pause and
+            // resume (idling while parked), so a resume or queue-dequeue
+            // must not stack a second one on top of it.
+            let should_spawn = {
+                let mut torrents_guard = torrents.write();
+                match torrents_guard.get_mut(hash) {
+                    Some(torrent) if !torrent.run_loop_active => {
+                        torrent.run_loop_active = true;
+                        true
+                    }
+                    _ => false,
+                }
+            };
 
-            let no_seed_mode_clone = no_seed_mode.clone();
-            let disconnect_on_complete_clone = disconnect_on_complete.clone();
-            tokio::spawn(async move {
-                Self::run_torrent(
-                    hash_clone,
-                    torrents_clone,
-                    disk_manager,
-                    bandwidth_limiter,
-                    peer_id,
-                    event_tx,
-                    tracker_client,
-                    listen_port,
-                    global_connections,
-                    no_seed_mode_clone,
-                    disconnect_on_complete_clone,
-                )
-                .await;
-            });
+            if should_spawn {
+                let shared = self.clone();
+                let hash = hash.to_string();
+                tokio::spawn(async move {
+                    shared.run_torrent(hash).await;
+                });
+            }
         }
 
         Ok(())
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn run_torrent(
-        hash: String,
-        torrents: Arc<RwLock<HashMap<String, ManagedTorrent>>>,
-        disk_manager: Arc<DiskManager>,
-        bandwidth_limiter: Arc<RwLock<BandwidthLimiter>>,
-        peer_id: PeerId,
-        event_tx: mpsc::UnboundedSender<PeerEvent>,
-        tracker_client: Arc<TrackerClient>,
-        listen_port: Arc<AtomicU16>,
-        global_connections: Arc<AtomicUsize>,
-        no_seed_mode: Arc<AtomicBool>,
-        disconnect_on_complete: Arc<AtomicBool>,
-    ) {
+    /// Per-torrent control loop: dials peers, runs choke rounds, performs
+    /// state transitions, and reannounces opportunistically until the
+    /// torrent is removed.
+    async fn run_torrent(self: Arc<Self>, hash: String) {
         tracing::info!("run_torrent started for {}", hash);
+
+        let torrents = &self.torrents;
+        let disk_manager = &self.disk_manager;
+        let bandwidth_limiter = &self.bandwidth_limiter;
+        let peer_id = self.peer_id;
+        let event_tx = &self.event_tx;
+        let tracker_client = &self.tracker_client;
+        let listen_port = &self.listen_port;
+        let global_connections = &self.global_connections;
+        let no_seed_mode = &self.no_seed_mode;
+        let disconnect_on_complete = &self.disconnect_on_complete;
         loop {
             let result = {
                 let torrents = torrents.read();
@@ -2301,6 +2850,15 @@ impl TorrentEngine {
                             "Torrent {} download complete, transitioning to Completed",
                             hash
                         );
+
+                        if !torrent.completion_processed {
+                            torrent.completion_processed = true;
+                            let shared = self.clone();
+                            let hash = hash.clone();
+                            tokio::spawn(async move {
+                                shared.handle_torrent_completed(hash).await;
+                            });
+                        }
                     }
 
                     // Handle Seeding <-> Completed transitions based on peer interest
@@ -2329,9 +2887,14 @@ impl TorrentEngine {
                         }
                     }
 
-                    if torrent.last_optimistic_unchoke.elapsed() >= OPTIMISTIC_UNCHOKE_INTERVAL {
-                        Self::run_choking_algorithm(torrent);
-                        torrent.last_optimistic_unchoke = Instant::now();
+                    if torrent.last_choke_round.elapsed() >= CHOKING_INTERVAL {
+                        let rotate_optimistic = torrent.last_optimistic_unchoke.elapsed()
+                            >= OPTIMISTIC_UNCHOKE_INTERVAL;
+                        Self::run_choking_algorithm(torrent, rotate_optimistic);
+                        torrent.last_choke_round = Instant::now();
+                        if rotate_optimistic {
+                            torrent.last_optimistic_unchoke = Instant::now();
+                        }
                     }
 
                     let stale_pieces = torrent.piece_manager.cleanup_stale_pieces();
@@ -2366,9 +2929,23 @@ impl TorrentEngine {
                         && state != TorrentState::Checking;
 
                     if should_reannounce {
+                        // Report "left" from verified pieces, consistent with
+                        // the periodic reannounce task; raw downloaded bytes
+                        // overcount (duplicates, failed pieces).
+                        let verified_bytes = torrent.piece_manager.have_count() as u64
+                            * torrent.meta.info.piece_length;
+                        let left = if torrent.piece_manager.is_complete() {
+                            0
+                        } else {
+                            torrent
+                                .meta
+                                .info
+                                .total_length
+                                .saturating_sub(verified_bytes)
+                        };
                         Some((
                             torrent.trackers.clone(),
-                            torrent.meta.info.total_length,
+                            left,
                             torrent.stats.downloaded,
                             torrent.stats.uploaded,
                             torrent.info_hash_bytes(),
@@ -2381,9 +2958,7 @@ impl TorrentEngine {
                 }
             };
 
-            if let Some((trackers, total_length, downloaded, uploaded, Some(info_hash))) =
-                reannounce_info
-            {
+            if let Some((trackers, left, downloaded, uploaded, Some(info_hash))) = reannounce_info {
                 {
                     let mut torrents_guard = torrents.write();
                     if let Some(torrent) = torrents_guard.get_mut(&hash) {
@@ -2410,7 +2985,7 @@ impl TorrentEngine {
                             port: listen_port_clone.load(Ordering::Relaxed),
                             uploaded,
                             downloaded,
-                            left: total_length.saturating_sub(downloaded),
+                            left,
                             event: TrackerEvent::None,
                         };
 
@@ -2443,18 +3018,24 @@ impl TorrentEngine {
         }
     }
 
-    fn run_choking_algorithm(torrent: &mut ManagedTorrent) {
-        let is_seeding = torrent.state == TorrentState::Seeding;
+    /// Tit-for-tat choke round. Ranks interested peers by bytes transferred
+    /// since the previous round (a rate, not lifetime totals), unchokes the
+    /// top MAX_UNCHOKED_PEERS - 1, and keeps one optimistic slot that rotates
+    /// on the optimistic interval.
+    fn run_choking_algorithm(torrent: &mut ManagedTorrent, rotate_optimistic: bool) {
+        // When complete (Seeding or Completed) reciprocate upload demand;
+        // while leeching, reward peers that send to us.
+        let is_complete = torrent.piece_manager.is_complete();
 
         let mut interested_peers: Vec<_> = torrent
             .peers
             .iter()
             .filter(|(_, info)| info.is_interested)
             .map(|(addr, info)| {
-                let metric = if is_seeding {
-                    info.upload_bytes
+                let metric = if is_complete {
+                    info.upload_bytes - info.choke_round_upload_bytes
                 } else {
-                    info.download_bytes
+                    info.download_bytes - info.choke_round_download_bytes
                 };
                 (*addr, metric)
             })
@@ -2473,25 +3054,73 @@ impl TorrentEngine {
             .map(|(addr, _)| *addr)
             .collect();
 
-        if !remaining.is_empty() {
-            use std::collections::hash_map::DefaultHasher;
+        // The optimistic peer keeps its slot across regular rounds; replace it
+        // when the rotation interval elapses or it is gone/promoted/uninterested.
+        let optimistic_still_valid = torrent
+            .optimistic_unchoke_peer
+            .map(|p| remaining.contains(&p))
+            .unwrap_or(false);
 
-            let mut hasher = DefaultHasher::new();
-            Instant::now().hash(&mut hasher);
-            let idx = hasher.finish() as usize % remaining.len();
-            new_unchoked.insert(remaining[idx]);
+        if rotate_optimistic || !optimistic_still_valid {
+            torrent.optimistic_unchoke_peer = if remaining.is_empty() {
+                None
+            } else {
+                use std::collections::hash_map::DefaultHasher;
+
+                let mut hasher = DefaultHasher::new();
+                Instant::now().hash(&mut hasher);
+                let idx = hasher.finish() as usize % remaining.len();
+                Some(remaining[idx])
+            };
+        }
+
+        if let Some(optimistic) = torrent.optimistic_unchoke_peer {
+            new_unchoked.insert(optimistic);
         }
 
         torrent.unchoked_peers = new_unchoked;
-    }
 
-    /// Returns the status of all torrents.
+        // Start the next measurement window.
+        for info in torrent.peers.values_mut() {
+            info.choke_round_download_bytes = info.download_bytes;
+            info.choke_round_upload_bytes = info.upload_bytes;
+        }
+    }
+}
+
+#[allow(dead_code)]
+impl TorrentEngine {
+    /// Returns the status of all torrents, including synthetic entries for
+    /// magnets still fetching metadata.
     pub async fn get_all_status(&self) -> Vec<crate::TorrentStatus> {
-        self.torrents
+        let mut statuses: Vec<crate::TorrentStatus> = self
+            .torrents
             .read()
             .values()
             .map(|t| t.to_status())
-            .collect()
+            .collect();
+
+        for (hash, pending) in self.pending_magnets.read().iter() {
+            statuses.push(crate::TorrentStatus {
+                info_hash: hash.clone(),
+                name: pending.name.clone(),
+                state: if pending.error.is_some() {
+                    "error".to_string()
+                } else {
+                    "metaDL".to_string()
+                },
+                progress: 0.0,
+                download_rate: 0.0,
+                upload_rate: 0.0,
+                downloaded: 0,
+                uploaded: 0,
+                total_size: 0,
+                peers: 0,
+                seeds: 0,
+            });
+        }
+
+        statuses
     }
 
     /// Returns tracker information for a torrent.
@@ -2586,6 +3215,21 @@ impl TorrentEngine {
     }
 
     pub async fn pause(&self, hash: &str) -> Result<(), EngineError> {
+        self.shared.pause_torrent(hash).await
+    }
+
+    pub async fn resume(&self, hash: &str) -> Result<(), EngineError> {
+        self.shared.resume_torrent(hash).await
+    }
+
+    /// Removes a torrent, optionally deleting files.
+    pub async fn remove(&self, hash: &str, delete_files: bool) -> Result<(), EngineError> {
+        self.shared.remove_torrent(hash, delete_files).await
+    }
+}
+
+impl EngineShared {
+    pub async fn pause_torrent(self: &Arc<Self>, hash: &str) -> Result<(), EngineError> {
         {
             let mut torrents = self.torrents.write();
             let torrent = torrents
@@ -2608,12 +3252,13 @@ impl TorrentEngine {
             tracing::info!("Paused torrent {}", hash);
         }
 
+        self.persist_session();
         self.start_next_queued().await;
 
         Ok(())
     }
 
-    pub async fn resume(&self, hash: &str) -> Result<(), EngineError> {
+    pub async fn resume_torrent(self: &Arc<Self>, hash: &str) -> Result<(), EngineError> {
         let is_complete = {
             let torrents = self.torrents.read();
             let torrent = torrents
@@ -2655,23 +3300,35 @@ impl TorrentEngine {
             }
         }
 
+        self.persist_session();
         self.start_torrent(hash).await
     }
 
-    /// Removes a torrent, optionally deleting files.
-    pub async fn remove(&self, hash: &str, delete_files: bool) -> Result<(), EngineError> {
-        let meta = {
+    pub async fn remove_torrent(
+        self: &Arc<Self>,
+        hash: &str,
+        delete_files: bool,
+    ) -> Result<(), EngineError> {
+        // A magnet still fetching metadata has no torrent or files yet; the
+        // in-flight fetch task notices the missing entry and aborts.
+        if self.pending_magnets.write().remove(hash).is_some() {
+            return Ok(());
+        }
+
+        let (meta, save_path) = {
             let mut torrents = self.torrents.write();
-            torrents
+            let torrent = torrents
                 .remove(hash)
-                .map(|t| t.meta)
-                .ok_or_else(|| EngineError::NotFound(hash.to_string()))?
+                .ok_or_else(|| EngineError::NotFound(hash.to_string()))?;
+            (torrent.meta, torrent.save_path)
         };
 
         self.disk_manager.unregister(hash);
 
         if delete_files {
-            let path = self.download_dir.join(&meta.info.name);
+            // Content lives at save_path/name: a file for single-file
+            // torrents, a directory otherwise.
+            let path = save_path.join(&meta.info.name);
             if path.exists() {
                 if path.is_dir() {
                     tokio::fs::remove_dir_all(&path).await?;
@@ -2681,6 +3338,8 @@ impl TorrentEngine {
             }
         }
 
+        persistence::delete_torrent_blob(hash).await;
+        self.persist_session();
         self.start_next_queued().await;
 
         Ok(())
@@ -2761,7 +3420,7 @@ impl TorrentEngine {
             .count()
     }
 
-    async fn start_next_queued(&self) {
+    async fn start_next_queued(self: &Arc<Self>) {
         let max_dl = self.max_active_downloads.load(Ordering::Relaxed);
         let max_ul = self.max_active_uploads.load(Ordering::Relaxed);
 
@@ -2816,12 +3475,16 @@ impl TorrentEngine {
             let _ = self.start_torrent(&hash).await;
         }
     }
+}
 
+#[allow(dead_code)]
+impl TorrentEngine {
     pub fn set_queue_settings(&self, max_downloads: usize, max_uploads: usize) {
         self.max_active_downloads
             .store(max_downloads, Ordering::Relaxed);
         self.max_active_uploads
             .store(max_uploads, Ordering::Relaxed);
+        self.persist_settings();
     }
 
     pub fn get_queue_settings(&self) -> (usize, usize) {
@@ -2970,11 +3633,16 @@ impl TorrentEngine {
             save_path,
         };
         self.categories.write().insert(name, category);
+        self.persist_settings();
     }
 
     /// Remove a category
     pub fn remove_category(&self, name: &str) -> bool {
-        self.categories.write().remove(name).is_some()
+        let removed = self.categories.write().remove(name).is_some();
+        if removed {
+            self.persist_settings();
+        }
+        removed
     }
 
     /// Get all categories
@@ -3074,6 +3742,7 @@ impl TorrentEngine {
     /// Set default share limits for new torrents
     pub fn set_default_share_limits(&self, limits: settings::ShareLimits) {
         *self.default_share_limits.write() = limits;
+        self.persist_settings();
     }
 
     /// Get default share limits
@@ -3095,9 +3764,12 @@ impl TorrentEngine {
 
     /// Set auto-add tracker settings
     pub fn set_auto_tracker_settings(&self, enabled: bool, trackers: Vec<String>) {
-        let mut settings = self.auto_tracker_settings.write();
-        settings.enabled = enabled;
-        settings.trackers = trackers;
+        {
+            let mut settings = self.auto_tracker_settings.write();
+            settings.enabled = enabled;
+            settings.trackers = trackers;
+        }
+        self.persist_settings();
     }
 
     /// Get auto-add tracker settings
@@ -3114,10 +3786,13 @@ impl TorrentEngine {
         target_path: Option<PathBuf>,
         use_category_path: bool,
     ) {
-        let mut settings = self.move_on_complete_settings.write();
-        settings.enabled = enabled;
-        settings.target_path = target_path;
-        settings.use_category_path = use_category_path;
+        {
+            let mut settings = self.move_on_complete_settings.write();
+            settings.enabled = enabled;
+            settings.target_path = target_path;
+            settings.use_category_path = use_category_path;
+        }
+        self.persist_settings();
     }
 
     /// Get move-on-completion settings
@@ -3144,97 +3819,17 @@ impl TorrentEngine {
         on_completion_enabled: bool,
         command: Option<String>,
     ) {
-        let mut settings = self.external_program_settings.write();
-        settings.on_completion_enabled = on_completion_enabled;
-        settings.on_completion_command = command;
+        {
+            let mut settings = self.external_program_settings.write();
+            settings.on_completion_enabled = on_completion_enabled;
+            settings.on_completion_command = command;
+        }
+        self.persist_settings();
     }
 
     /// Get external program settings
     pub fn get_external_program_settings(&self) -> settings::ExternalProgramSettings {
         self.external_program_settings.read().clone()
-    }
-
-    /// Escape a string for safe use in shell commands.
-    /// This prevents command injection by escaping shell metacharacters.
-    #[cfg(unix)]
-    fn shell_escape(s: &str) -> String {
-        // For Unix shells, wrap in single quotes and escape any single quotes
-        // Single quotes preserve everything literally except single quotes themselves
-        let escaped = s.replace('\'', "'\"'\"'");
-        format!("'{}'", escaped)
-    }
-
-    #[cfg(windows)]
-    fn shell_escape(s: &str) -> String {
-        // For Windows cmd.exe, escape special characters
-        // The safest approach is to wrap in double quotes and escape problematic chars
-        let escaped = s
-            .replace('^', "^^")
-            .replace('&', "^&")
-            .replace('<', "^<")
-            .replace('>', "^>")
-            .replace('|', "^|")
-            .replace('%', "%%")
-            .replace('"', "\"\"");
-        format!("\"{}\"", escaped)
-    }
-
-    /// Run external program for a completed torrent
-    pub async fn run_completion_program(&self, hash: &str) -> Result<(), String> {
-        let settings = self.external_program_settings.read().clone();
-        if !settings.on_completion_enabled {
-            return Ok(());
-        }
-
-        let Some(command_template) = settings.on_completion_command else {
-            return Ok(());
-        };
-
-        let (name, save_path) = {
-            let torrents = self.torrents.read();
-            let torrent = torrents.get(hash).ok_or("Torrent not found")?;
-            (torrent.meta.info.name.clone(), torrent.save_path.clone())
-        };
-
-        // Escape all user-controlled values to prevent command injection
-        let escaped_name = Self::shell_escape(&name);
-        let escaped_full_path = Self::shell_escape(&save_path.join(&name).to_string_lossy());
-        let escaped_save_path = Self::shell_escape(&save_path.to_string_lossy());
-        let escaped_hash = Self::shell_escape(hash);
-
-        // Replace placeholders with escaped values
-        let command = command_template
-            .replace("%N", &escaped_name)
-            .replace("%F", &escaped_full_path)
-            .replace("%R", &escaped_save_path)
-            .replace("%D", &escaped_save_path)
-            .replace("%I", &escaped_hash);
-
-        tracing::info!("Running completion program: {}", command);
-
-        // Execute command
-        #[cfg(unix)]
-        let result = tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(&command)
-            .spawn();
-
-        #[cfg(windows)]
-        let result = tokio::process::Command::new("cmd")
-            .arg("/C")
-            .arg(&command)
-            .spawn();
-
-        match result {
-            Ok(mut child) => {
-                // Don't wait for completion, just spawn it
-                tokio::spawn(async move {
-                    let _ = child.wait().await;
-                });
-                Ok(())
-            }
-            Err(e) => Err(format!("Failed to run command: {}", e)),
-        }
     }
 
     // ========== Watch Folders ==========
@@ -3246,20 +3841,18 @@ impl TorrentEngine {
 
     /// Add a watch folder
     pub async fn add_watch_folder(&self, folder: settings::WatchFolder) {
-        let watch_folder = watch::WatchFolder {
-            id: folder.id,
-            path: folder.path,
-            category: folder.category,
-            tags: folder.tags,
-            process_existing: folder.process_existing,
-            enabled: folder.enabled,
-        };
-        self.watch_manager.add_folder(watch_folder).await;
+        // watch::WatchFolder is a re-export of settings::WatchFolder.
+        self.watch_manager.add_folder(folder).await;
+        self.persist_settings();
     }
 
     /// Remove a watch folder
     pub async fn remove_watch_folder(&self, id: &str) -> bool {
-        self.watch_manager.remove_folder(id).await.is_some()
+        let removed = self.watch_manager.remove_folder(id).await.is_some();
+        if removed {
+            self.persist_settings();
+        }
+        removed
     }
 
     /// Get all watch folders
@@ -3277,11 +3870,16 @@ impl TorrentEngine {
     /// Add an RSS feed
     pub async fn add_rss_feed(&self, feed: rss::RssFeed) {
         self.rss_manager.add_feed(feed).await;
+        self.persist_settings();
     }
 
     /// Remove an RSS feed
     pub async fn remove_rss_feed(&self, id: &str) -> bool {
-        self.rss_manager.remove_feed(id).await.is_some()
+        let removed = self.rss_manager.remove_feed(id).await.is_some();
+        if removed {
+            self.persist_settings();
+        }
+        removed
     }
 
     /// Get all RSS feeds
@@ -3292,11 +3890,16 @@ impl TorrentEngine {
     /// Add an RSS download rule
     pub async fn add_rss_rule(&self, rule: rss::RssDownloadRule) {
         self.rss_manager.add_rule(rule).await;
+        self.persist_settings();
     }
 
     /// Remove an RSS download rule
     pub async fn remove_rss_rule(&self, id: &str) -> bool {
-        self.rss_manager.remove_rule(id).await.is_some()
+        let removed = self.rss_manager.remove_rule(id).await.is_some();
+        if removed {
+            self.persist_settings();
+        }
+        removed
     }
 
     /// Get all RSS download rules
@@ -3420,4 +4023,19 @@ impl TorrentEngine {
             false
         }
     }
+}
+
+/// Recursively copies a file or directory tree (blocking; callers run it via
+/// spawn_blocking). Used as the cross-filesystem fallback for moves.
+fn copy_recursively(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if src.is_dir() {
+        std::fs::create_dir_all(dst)?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            copy_recursively(&entry.path(), &dst.join(entry.file_name()))?;
+        }
+    } else {
+        std::fs::copy(src, dst)?;
+    }
+    Ok(())
 }

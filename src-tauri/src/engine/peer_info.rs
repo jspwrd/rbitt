@@ -6,6 +6,10 @@ use std::time::Instant;
 pub struct PeerInfo {
     pub download_bytes: u64,
     pub upload_bytes: u64,
+    /// Byte counters at the start of the current choke round, used to rank
+    /// peers by recent transfer rate rather than lifetime totals.
+    pub choke_round_download_bytes: u64,
+    pub choke_round_upload_bytes: u64,
     pub last_active: Instant,
     pub is_choking_us: bool,
     pub is_interested: bool,
@@ -17,6 +21,8 @@ impl PeerInfo {
         Self {
             download_bytes: 0,
             upload_bytes: 0,
+            choke_round_download_bytes: 0,
+            choke_round_upload_bytes: 0,
             last_active: Instant::now(),
             is_choking_us: true,
             is_interested: false,
